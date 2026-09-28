@@ -3,9 +3,7 @@ name: android
 on:
   push:
     branches: [main]
-    paths: ["android/**", ".github/workflows/android.yml"]
-  pull_request:
-    paths: ["android/**", ".github/workflows/android.yml"]
+    paths: ["android/**", ".github/workflows/android.yml", "core/**"]
   workflow_dispatch:
 
 jobs:
@@ -23,25 +21,62 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build release APK
+      - name: Generate release keystore (CI-local, stable via cache)
+        id: keystore
+        uses: actions/cache@v4
+        with:
+          path: mini.keystore
+          key: mini-keystore-v1
+
+      - name: Create keystore if missing
+        if: steps.keystore.outputs.cache-hit != 'true'
+        run: |
+          keytool -genkeypair -v \
+            -keystore mini.keystore -alias mini \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass minimini -keypass minimini \
+            -dname "CN=Mini Browser, OU=Mini, O=Mini, L=Net, S=Net, C=US"
+
+      - name: Build signed release APK
         working-directory: android
+        env:
+          MINI_STORE_FILE: ${{ github.workspace }}/mini.keystore
+          MINI_STORE_PASS: minimini
+          MINI_KEY_ALIAS: mini
+          MINI_KEY_PASS: minimini
         run: gradle assembleRelease --no-daemon
 
-      - name: Collect APKs
+      - name: Collect signed APK
         run: |
           mkdir -p out
-          find android/app/build/outputs -name "*.apk" -exec cp {} out/ \;
+          find android/app/build/outputs -name "*.apk" ! -name "*unsigned*" -exec cp {} out/Mini.apk \;
           ls -la out/
+          test -f out/Mini.apk
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: mini-browser-android
-          path: out/*.apk
+          path: out/Mini.apk
           if-no-files-found: error
 
-      - name: Release on tag
-        if: startsWith(github.ref, 'refs/tags/v')
+  publish:
+    needs: apk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mini-browser-android
+          path: out
+
+      - name: Attach APK to rolling release
         uses: softprops/action-gh-release@v2
         with:
-          files: out/*.apk
+          tag_name: latest
+          name: "Mini Browser — latest"
+          prerelease: false
+          make_latest: true
+          allowUpdates: true
+          files: out/Mini.apk

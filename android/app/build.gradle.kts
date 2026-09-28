@@ -20,11 +20,24 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    signingConfigs {
+        create("release") {
+            val storeFileEnv = System.getenv("MINI_STORE_FILE")
+            if (storeFileEnv != null) {
+                storeFile = file(storeFileEnv)
+                storePassword = System.getenv("MINI_STORE_PASS")
+                keyAlias = System.getenv("MINI_KEY_ALIAS")
+                keyPassword = System.getenv("MINI_KEY_PASS")
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            val storeFileEnv = System.getenv("MINI_STORE_FILE")
+            signingConfig = if (storeFileEnv != null) signingConfigs.getByName("release") else null
         }
     }
     dependenciesInfo {
