@@ -5,12 +5,23 @@ on:
     branches: [main]
     paths: ["src/**", "core/**", "mini-agent/**", "Cargo.toml", ".github/workflows/desktop.yml"]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        default: ""
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Unit tests (mini-core)
         run: cargo test -p mini-core
@@ -28,6 +39,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -69,40 +82,3 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  publish:
-    needs: build-desktop
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout (for version + release notes)
-        uses: actions/checkout@v4
-
-      - name: Read version
-        id: ver
-        run: echo "name=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' android/app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore binaries from artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: mini-browser-x86_64-unknown-linux-gnu
-          path: out/linux
-
-      - name: Restore windows binaries from artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: mini-browser-x86_64-pc-windows-msvc
-          path: out/windows
-
-      - name: Attach raw binaries to versioned release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.ver.outputs.name }}
-          name: "Mini Browser v${{ steps.ver.outputs.name }}"
-          body_path: RELEASE_NOTES.md
-          prerelease: false
-          make_latest: true
-          files: |
-            out/linux/mini-browser
-            out/windows/mini-browser.exe
-            out/windows/mini-agent.exe

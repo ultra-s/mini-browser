@@ -1,0 +1,151 @@
+name: release
+
+# Bumps the version, builds everything, publishes one versioned release
+# containing Mini.apk + raw desktop binaries + auto-generated changelog.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+  push:
+    branches: [main]
+    paths: ["android/**", "src/**", "core/**", "mini-agent/**"]
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      skipped: ${{ steps.bump.outputs.skipped }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump versionName in android/app/build.gradle.kts
+        id: bump
+        run: |
+          FILE=android/app/build.gradle.kts
+          CUR=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' "$FILE")
+          [ -n "$CUR" ] || { echo "cannot read current version" >&2; exit 1; }
+          IFS=. read -r MA MI PA <<< "$CUR"
+          case "${{ github.event.inputs.bump || 'patch' }}" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            *)     PA=$((PA+1)) ;;
+          esac
+          NEW="$MA.$MI.$PA"
+          if git tag -l "v$CUR" | grep -q .; then
+            # current version already released -> bump; else release current unchanged
+            sed -i "s/versionName = \"$CUR\"/versionName = \"$NEW\"/" "$FILE"
+            sed -i -E "s/versionCode = [0-9]+/versionCode = $(( $(sed -n 's/.*versionCode = \([0-9]*\).*/\1/p' "$FILE") + 1 ))/" "$FILE"
+            echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$CUR" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit bumped version
+        if: steps.bump.outputs.version != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add android/app/build.gradle.kts
+          git diff --cached --quiet || git commit -m "release: v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:${{ github.ref_name }} "v${{ steps.bump.outputs.version }}"
+
+      - name: Write release notes
+        run: |
+          {
+            echo "## Mini Browser v${{ steps.bump.outputs.version }}"
+            echo
+            echo "### Changes"
+            PREV=$(git describe --tags --abbrev=0 "v${{ steps.bump.outputs.version }}^" 2>/dev/null || echo "")
+            if [ -n "$PREV" ]; then
+              git log --pretty=format:"- %s (%h)" "$PREV..v${{ steps.bump.outputs.version }}" | head -30
+            else
+              git log --pretty=format:"- %s (%h)" | head -30
+            fi
+            echo
+            echo
+            echo "### Downloads (raw files, no zip)"
+            echo "- \`Mini.apk\` — Android (signed, installable)"
+            echo "- \`mini-browser\` / \`mini-browser.exe\` — desktop Linux / Windows"
+            echo "- \`mini-agent\` / \`mini-agent.exe\` — agent CLI (Linux / Windows)"
+          } > RELEASE_NOTES.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
+
+  apk:
+    needs: version
+    uses: ./.github/workflows/android.yml
+    with:
+      ref: v${{ needs.version.outputs.version }}
+
+  desktop:
+    needs: version
+    uses: ./.github/workflows/desktop.yml
+    with:
+      ref: v${{ needs.version.outputs.version }}
+
+  publish:
+    needs: [version, apk, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Collect APK
+        uses: actions/download-artifact@v4
+        with:
+          name: mini-browser-android
+          path: out/android
+
+      - name: Collect linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: mini-browser-x86_64-unknown-linux-gnu
+          path: out/linux
+
+      - name: Collect windows binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: mini-browser-x86_64-pc-windows-msvc
+          path: out/windows
+
+      - name: Flatten assets
+        run: |
+          mkdir -p rel
+          find out/android -name "*.apk" -exec cp {} rel/ \;
+          find out/linux -type f -exec cp {} rel/ \;
+          find out/windows -type f -exec cp {} rel/ \;
+          ls -la rel/
+
+      - name: Publish versioned release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: "Mini Browser v${{ needs.version.outputs.version }}"
+          body_path: RELEASE_NOTES.md
+          prerelease: false
+          make_latest: true
+          files: rel/*

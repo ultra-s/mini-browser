@@ -5,12 +5,23 @@ on:
     branches: [main]
     paths: ["android/**", ".github/workflows/android.yml", "core/**"]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build"
+        default: ""
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
 
 jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -74,16 +85,4 @@ jobs:
       - name: Checkout (for version + release notes)
         uses: actions/checkout@v4
 
-      - name: Read version
-        id: ver
-        run: echo "name=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' android/app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
-
-      - name: Attach APK to versioned release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.ver.outputs.name }}
-          name: "Mini Browser v${{ steps.ver.outputs.name }}"
-          body_path: RELEASE_NOTES.md
-          prerelease: false
-          make_latest: true
-          files: out/Mini.apk
+      # Release publishing is handled by release.yml
