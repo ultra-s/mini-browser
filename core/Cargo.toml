@@ -1,0 +1,13 @@
+[package]
+name = "mini-core"
+version = "0.1.0"
+edition = "2024"
+description = "Platform-agnostic browser core shared by desktop (CEF) and Android (GeckoView/WebView)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "mini_core"
+crate-type = ["lib", "cdylib"]

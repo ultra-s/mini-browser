@@ -1,0 +1,32 @@
+[package]
+name = "mini-browser"
+version = "0.1.0"
+edition = "2024"
+description = "Mini: a minimalist native browser shell in Rust + CEF (Chromium), inspired by rauchg's Mini"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mini-browser"
+path = "src/main.rs"
+
+[[bin]]
+name = "mini-browser_helper"
+path = "src/bin/mini-browser_helper.rs"
+
+[features]
+default = ["sandbox"]
+sandbox = ["cef/sandbox"]
+linux-x11 = ["x11-dl"]
+
+[dependencies]
+cef = { git = "https://github.com/tauri-apps/cef-rs", features = ["build-util"] }
+mini-core = { path = "core" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = { version = "2", optional = true }
+
+[workspace]
+members = ["core"]

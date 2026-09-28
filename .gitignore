@@ -1,0 +1,6 @@
+target/
+*.tar.gz
+.gradle/
+build/
+local.properties
+__pycache__/
