@@ -71,6 +71,9 @@ jobs:
           name: mini-browser-android
           path: out
 
+      - name: Checkout (for version + release notes)
+        uses: actions/checkout@v4
+
       - name: Read version
         id: ver
         run: echo "name=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' android/app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
