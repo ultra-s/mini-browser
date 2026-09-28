@@ -25,7 +25,7 @@ android {
 
 dependencies {
     // M5: GeckoView shell (Firefox engine). Swap to "system" WebView variant if needed.
-    implementation("org.mozilla.geckoview:geckoview:130.0.20240909222904")
+    implementation("org.mozilla.geckoview:geckoview:128.0.20240627120043")
     implementation("androidx.activity:activity-ktx:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
 }
