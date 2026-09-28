@@ -20,19 +20,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Accept licenses (SDK preinstalled on ubuntu-latest)
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Create gradle wrapper jar-less bootstrap
+      - name: Build release APK
         working-directory: android
-        run: |
-          gradle wrapper --gradle-version 8.9 --no-daemon || true
-          gradle assembleRelease --no-daemon
+        run: gradle assembleRelease --no-daemon
 
-      - name: Rename artifacts
+      - name: Collect APKs
         run: |
           mkdir -p out
           find android/app/build/outputs -name "*.apk" -exec cp {} out/ \;
