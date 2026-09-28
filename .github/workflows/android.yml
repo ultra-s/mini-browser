@@ -71,12 +71,16 @@ jobs:
           name: mini-browser-android
           path: out
 
-      - name: Attach APK to rolling release
+      - name: Read version
+        id: ver
+        run: echo "name=$(grep -o 'versionName = "[^"]*"' android/app/build.gradle.kts | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Attach APK to versioned release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "Mini Browser — latest"
+          tag_name: v${{ steps.ver.outputs.name }}
+          name: "Mini Browser v${{ steps.ver.outputs.name }}"
+          body_path: RELEASE_NOTES.md
           prerelease: false
           make_latest: true
-          allowUpdates: true
           files: out/Mini.apk

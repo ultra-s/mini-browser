@@ -87,14 +87,18 @@ jobs:
           name: mini-browser-x86_64-pc-windows-msvc
           path: out/windows
 
-      - name: Attach raw binaries to rolling release
+      - name: Read version
+        id: ver
+        run: echo "name=$(grep -o 'versionName = "[^"]*"' android/app/build.gradle.kts | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Attach raw binaries to versioned release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "Mini Browser — latest"
+          tag_name: v${{ steps.ver.outputs.name }}
+          name: "Mini Browser v${{ steps.ver.outputs.name }}"
+          body_path: RELEASE_NOTES.md
           prerelease: false
           make_latest: true
-          allowUpdates: true
           files: |
             out/linux/mini-browser
             out/linux/mini-agent
