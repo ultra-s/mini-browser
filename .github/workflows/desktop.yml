@@ -55,10 +55,10 @@ jobs:
             export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH"
           fi
           cargo build --release --no-default-features
-          cargo build --release -p mini-agent
+          (cd mini-agent && cargo build --release)
           mkdir -p dist
           cp target/release/mini-browser dist/
-          cp target/release/mini-agent dist/
+          cp mini-agent/target/release/mini-agent dist/
           tar czf mini-browser-${{ matrix.target }}.tar.gz -C dist .
 
       - name: Upload desktop bundle
