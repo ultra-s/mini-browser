@@ -202,7 +202,7 @@ class MainActivity : Activity() {
     private fun go(raw: String) {
         val v = raw.trim()
         if (v.isEmpty()) return
-        val isUrl = v.startsWith("http") || Regex("^[\w-]+(\\.[\w-]+)+").containsMatchIn(v)
+        val isUrl = v.startsWith("http") || Regex("""^\w[\w.-]*\.[A-Za-z]{2,}""").containsMatchIn(v)
         val target = if (isUrl) sanitize(v)
                      else "https://duckduckgo.com/?q=" + android.net.Uri.encode(v)
         omnibox.setText(target)
