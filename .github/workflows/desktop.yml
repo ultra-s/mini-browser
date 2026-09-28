@@ -103,7 +103,7 @@ jobs:
           prerelease: false
           make_latest: true
           files: |
-            out/linux/mini-browser
-            out/linux/mini-agent
-            out/windows/mini-browser.exe
-            out/windows/mini-agent.exe
+            out/**/*.exe
+            out/**/mini-browser
+            out/**/mini-agent
+            !out/**/*.dll
