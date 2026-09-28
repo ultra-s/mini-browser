@@ -65,6 +65,7 @@ class MainActivity : Activity() {
     private var stealth = false
     private var desktopMode = false
     private var pendingWebPermission: PermissionRequest? = null
+    private lateinit var store: MiniStore
     private var pendingDownloadUrl: String? = null
     private var pendingDownloadDisposition: String? = null
     private var pendingDownloadMime: String? = null
@@ -72,9 +73,10 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         stealth = intent.getBooleanExtra("stealth", false)
+        store = MiniStore(this)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         buildUi()
-        newTab(initialUrl())
+        restoreOrHome()
         requestNotificationPermissionIfNeeded()
     }
 
@@ -84,6 +86,25 @@ class MainActivity : Activity() {
             target != null -> sanitize(target)
             else -> "file:///android_asset/start.html" + if (stealth) "?stealth=1" else ""
         }
+    }
+
+    private fun restoreOrHome() {
+        val target = intent?.dataString
+        if (target != null) { newTab(sanitize(target)); return }
+        if (!stealth) {
+            store.restoreSession()?.let { (urls, idx) ->
+                urls.forEachIndexed { i, u -> newTab(u) }
+                // newTab switches to each; land on the saved active one
+                if (idx in tabs.indices) switchToTab(idx)
+                return
+            }
+        }
+        newTab(store.homePage + if (stealth) "?stealth=1" else "")
+    }
+
+    private fun saveSessionNow() {
+        if (stealth || tabs.isEmpty()) return
+        store.saveSession(tabs.map { it.url ?: "" }, currentTab)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -104,6 +125,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        saveSessionNow()
         if (stealth) purgeEverything()
     }
 
@@ -208,8 +230,19 @@ class MainActivity : Activity() {
     }
 
     private fun showMenu() {
+        val url = webView.url ?: ""
+        val title = webView.title ?: url
+        val bm = if (url.isNotEmpty() && store.isBookmarked(url)) "Remove bookmark" else "Add bookmark"
         val items = listOf(
-            "New tab" to { newTab("file:///android_asset/start.html") },
+            bm to { if (store.isBookmarked(url)) store.removeBookmark(url) else store.addBookmark(title, url) },
+            "Save to reading list" to { store.addReading(title, url); Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show() },
+            "Bookmarks" to { showList("Bookmarks") { store.bookmarks() } },
+            "History" to { if (stealth) Toast.makeText(this, "No history in stealth", Toast.LENGTH_SHORT).show() else showList("History") { store.history() } },
+            "Reading list" to { showList("Reading list") { store.readingList() } },
+            "Search engine: " + store.searchEngine.uppercase() to { cycleEngine() },
+            "Export data" to { exportData() },
+            "Wipe all data" to { store.wipeAll(); purgeEverything(); Toast.makeText(this, "All data wiped", Toast.LENGTH_SHORT).show() },
+            "New tab" to { newTab(store.homePage) },
             if (desktopMode) "Mobile site" to { toggleDesktopMode(false) }
             else "Desktop site" to { toggleDesktopMode(true) },
             "Find in page" to { showFindBar() },
@@ -348,6 +381,38 @@ class MainActivity : Activity() {
         Toast.makeText(this, "Downloading…", Toast.LENGTH_SHORT).show()
     }
 
+    private fun showList(title: String, source: () -> org.json.JSONArray) {
+        val arr = source()
+        if (arr.length() == 0) { Toast.makeText(this, "Empty", Toast.LENGTH_SHORT).show(); return }
+        val entries = (0 until arr.length()).map { arr.getJSONObject(it) }.reversed().take(50)
+        val labels = entries.map { e -> (e.optString("title").ifEmpty { e.optString("url") }).take(48) }.toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(title)
+            .setItems(labels) { _, which ->
+                val u = entries[which].optString("url")
+                if (u.isNotEmpty()) go(u)
+            }
+            .show()
+    }
+
+    private fun cycleEngine() {
+        val engines = listOf("ddg", "google", "bing", "brave")
+        val next = engines[(engines.indexOf(store.searchEngine) + 1) % engines.size]
+        store.searchEngine = next
+        Toast.makeText(this, "Search: $next", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun exportData() {
+        try {
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            dir.mkdirs()
+            java.io.File(dir, "mini-export.json").writeText(store.exportJson())
+            Toast.makeText(this, "Exported to Downloads/mini-export.json", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private inner class MiniClient : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
         override fun onPageFinished(view: WebView, url: String) {
@@ -355,6 +420,7 @@ class MainActivity : Activity() {
             securityChip.text = if (url.startsWith("https://") || url.startsWith("file://")) "🔒" else "⚠"
             tabTitles[currentTab] = view.title ?: "Tab"
             refreshTabStrip()
+            if (!stealth && url.startsWith("http")) store.addHistory(view.title ?: url, url)
         }
     }
 
@@ -448,10 +514,10 @@ class MainActivity : Activity() {
         val v = raw.trim()
         if (v.isEmpty()) return
         val target = when {
-            v == "mini://home" -> "file:///android_asset/start.html" + if (stealth) "?stealth=1" else ""
+            v == "mini://home" -> store.homePage + if (stealth) "?stealth=1" else ""
             v.startsWith("http") || v.startsWith("file://") || v.startsWith("mini://") -> sanitize(v)
             Regex("""^\w[\w.-]*\.[A-Za-z]{2,}""").containsMatchIn(v) -> sanitize(v)
-            else -> "https://duckduckgo.com/?q=" + Uri.encode(v)
+            else -> store.searchUrlFor(v)
         }
         omnibox.setText(target)
         webView.loadUrl(target)
