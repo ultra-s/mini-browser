@@ -89,7 +89,7 @@ jobs:
 
       - name: Read version
         id: ver
-        run: echo "name=$(grep -o 'versionName = "[^"]*"' android/app/build.gradle.kts | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+        run: echo "name=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' android/app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
 
       - name: Attach raw binaries to versioned release
         uses: softprops/action-gh-release@v2
