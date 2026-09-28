@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mini</title>
+<style>
+  :root {
+    --ink: #0e0d12;
+    --ink-2: #16151c;
+    --glow: #ff7a45;
+    --glow-2: #b06cff;
+    --text: #e9e6f0;
+    --dim: #8b8798;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace;
+    background: var(--ink);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  /* aurora backdrop: two drifting radial blobs, not a gradient banner */
+  .blob {
+    position: fixed; border-radius: 50%; filter: blur(90px); opacity: .35;
+    width: 46vmax; height: 46vmax; pointer-events: none;
+  }
+  .blob.a { background: var(--glow);  top: -18vmax; left: -12vmax; animation: drift-a 26s ease-in-out infinite alternate; }
+  .blob.b { background: var(--glow-2); bottom: -20vmax; right: -14vmax; animation: drift-b 32s ease-in-out infinite alternate; }
+  @keyframes drift-a { to { transform: translate(9vmax, 7vmax) scale(1.15); } }
+  @keyframes drift-b { to { transform: translate(-8vmax, -6vmax) scale(1.1); } }
+
+  main { position: relative; width: min(680px, 86vw); }
+
+  /* wordmark: cut-corner, no logo cliches */
+  h1 {
+    font-size: 15px; letter-spacing: .55em; color: var(--dim);
+    text-transform: uppercase; margin-bottom: 26px; font-weight: 400;
+  }
+  h1 b { color: var(--glow); font-weight: 400; }
+
+  form { position: relative; }
+  input {
+    width: 100%; padding: 19px 52px 19px 22px;
+    font: inherit; font-size: 17px;
+    color: var(--text); background: var(--ink-2);
+    border: 1px solid #2a2833; border-radius: 14px;
+    outline: none; transition: border-color .18s, box-shadow .18s;
+  }
+  input::placeholder { color: #55505f; }
+  input:focus {
+    border-color: var(--glow);
+    box-shadow: 0 0 0 3px rgba(255,122,69,.14), 0 18px 50px -20px rgba(176,108,255,.35);
+  }
+  .enter {
+    position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+    color: var(--dim); font-size: 13px; pointer-events: none;
+  }
+
+  /* quick grid: lean monospace chips, not card rows */
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  a {
+    font-size: 12.5px; color: var(--dim); text-decoration: none;
+    padding: 7px 12px; border: 1px solid #232129; border-radius: 999px;
+    transition: color .15s, border-color .15s;
+  }
+  a:hover { color: var(--glow); border-color: var(--glow); }
+  a::before { content: "→ "; opacity: .5; }
+
+  footer {
+    margin-top: 34px; font-size: 11.5px; color: #4d4956; letter-spacing: .08em;
+  }
+  footer span { color: var(--glow-2); }
+
+  /* stealth indicator */
+  .stealth {
+    position: fixed; top: 18px; right: 20px; display: none;
+    font-size: 11px; letter-spacing: .3em; color: var(--glow-2);
+    border: 1px solid var(--glow-2); padding: 6px 12px; border-radius: 999px;
+  }
+  body.stealth .stealth { display: block; }
+</style>
+</head>
+<body>
+  <div class="blob a"></div>
+  <div class="blob b"></div>
+  <div class="stealth">STEALTH</div>
+  <main>
+    <h1>Mini<b>.</b></h1>
+    <form onsubmit="go()">
+      <input id="q" autofocus placeholder="search or type a url" spellcheck="false" autocomplete="off">
+      <span class="enter">↵</span>
+    </form>
+    <nav>
+      <a href="https://duckduckgo.com">ddg</a>
+      <a href="https://news.ycombinator.com">hn</a>
+      <a href="https://github.com">github</a>
+      <a href="https://rust-lang.org">rust</a>
+      <a href="https://vercel.com">vercel</a>
+      <a href="https://mail.proton.me">proton</a>
+    </nav>
+    <footer>run <span>mini-agent</span> from a terminal to drive this browser — try <span>mini-agent open example.com</span></footer>
+  </main>
+<script>
+  // stealth hint via query flag passed by the shell
+  if (new URLSearchParams(location.search).get('stealth') === '1') {
+    document.body.classList.add('stealth');
+  }
+  function go() {
+    let v = document.getElementById('q').value.trim();
+    if (!v) return;
+    const isUrl = /^https?:\/\//.test(v) || /^[\w-]+(\.[\w-]+)+(\/|$)/.test(v);
+    location = isUrl ? (v.startsWith('http') ? v : 'https://' + v)
+                     : 'https://duckduckgo.com/?q=' + encodeURIComponent(v);
+  }
+  document.querySelector('form').addEventListener('submit', e => { e.preventDefault(); go(); });
+</script>
+</body>
+</html>

@@ -138,10 +138,22 @@ wrap_browser_process_handler! {
 
             // Check if a "--url=" value was provided via the command-line. If so, use
             // that instead of the default URL.
+            let stealth = std::env::var("MINI_STEALTH").map(|v| v == "1").unwrap_or(false);
             let url = CefString::from(&command_line.switch_value(Some(&CefString::from("url"))))
                 .to_string();
             let url = if url.is_empty() {
-                "https://duckduckgo.com/"
+                // Serve the embedded start page from disk (Chromium needs a real file:// or served URL).
+                let cache = std::env::var("MINI_CACHE_DIR").unwrap_or_else(|_| {
+                    format!("{}/.mini-browser", std::env::var("HOME").unwrap_or_default())
+                });
+                let page = format!("{}/start.html", cache);
+                let _ = std::fs::write(
+                    &page,
+                    crate::shared::resources::start_page_html(stealth),
+                );
+                let flag = if stealth { "?stealth=1" } else { "" };
+                let _ = stealth;
+                &format!("file://{page}{flag}")
             } else {
                 url.as_str()
             };

@@ -53,19 +53,53 @@ pub fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut
     let mut app = simple_app::SimpleApp::new();
 
     // Persistent profile: cache, cookies and storage survive restarts.
-    let cache = std::env::var("MINI_CACHE_DIR")
-        .unwrap_or_else(|_| format!("{}/.mini-browser", std::env::var("HOME").unwrap_or_default()));
+    // Stealth mode (MINI_STEALTH=1): everything stays in a throwaway temp dir,
+    // nothing persists, session restore is skipped.
+    let stealth = std::env::var("MINI_STEALTH").map(|v| v == "1").unwrap_or(false);
+    let cache: std::path::PathBuf = if stealth {
+        std::env::temp_dir().join(format!("mini-stealth-{}", std::process::id()))
+    } else {
+        std::env::var("MINI_CACHE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                let mut p = std::env::home_dir().unwrap_or_default();
+                p.push(".mini-browser");
+                p
+            })
+    };
     let _ = std::fs::create_dir_all(&cache);
 
     // Session restore: tabs are reloaded from disk when the handler is created
-    // and saved when the last browser closes.
-    simple_handler::set_session_path(std::path::Path::new(&cache).join("session.json"));
+    // and saved when the last browser closes. Disabled in stealth mode.
+    if !stealth {
+        simple_handler::set_session_path(std::path::Path::new(&cache).join("session.json"));
+    }
 
-    let settings = Settings {
+    let mut settings = Settings {
         no_sandbox: !cfg!(feature = "sandbox") as _,
-        root_cache_path: CefString::from(cache.as_str()),
+        root_cache_path: CefString::from(cache.to_string_lossy().as_ref()),
         ..Default::default()
     };
+    // Stealth hardening via settings:
+    if stealth {
+        // Engine-level UA, uniform across installs.
+        settings.user_agent = CefString::from(
+            "Mozilla/5.0 (Chrome/154; Mini Stealth) Safari/537.36",
+        );
+        // Do not persist session cookies.
+        settings.persist_session_cookies = 0;
+    }
+    // Stealth/Tor proxy must go through the command line: MINI_PROXY=socks5://127.0.0.1:9050
+    if let Ok(proxy) = std::env::var("MINI_PROXY") {
+        if !proxy.is_empty() {
+            if let Some(cmd) = command_line_get_global() {
+                cmd.append_switch_with_value(
+                    Some(&CefString::from("proxy-server")),
+                    Some(&CefString::from(proxy.as_str())),
+                );
+            }
+        }
+    }
     assert_eq!(
         initialize(
             Some(main_args),

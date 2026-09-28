@@ -1,0 +1,75 @@
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "core/**", "mini-agent/**", "Cargo.toml", ".github/workflows/desktop.yml"]
+  pull_request:
+    paths: ["src/**", "core/**", "mini-agent/**"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit tests (mini-core)
+        run: cargo test -p mini-core
+
+  build-desktop:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build libgtk-3-dev libx11-dev libasound2-dev
+
+      - name: Export CEF binaries
+        run: |
+          cargo install --locked --git https://github.com/tauri-apps/cef-rs export-cef-dir || cargo install --git https://github.com/tauri-apps/cef-rs export-cef-dir
+          export-cef-dir --force $HOME/.local/share/cef
+
+      - name: Build (no sandbox for portable artifact)
+        env:
+          CEF_PATH: ${{ github.workspace }}/.cef
+        shell: bash
+        run: |
+          export CEF_PATH="$HOME/.local/share/cef"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$CEF_PATH"
+          fi
+          cargo build --release --no-default-features
+          cargo build --release -p mini-agent
+          mkdir -p dist
+          cp target/release/mini-browser dist/
+          cp target/release/mini-agent dist/
+          tar czf mini-browser-${{ matrix.target }}.tar.gz -C dist .
+
+      - name: Upload desktop bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-browser-${{ matrix.target }}
+          path: mini-browser-*.tar.gz
+          if-no-files-found: error
+
+      - name: Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mini-browser-*.tar.gz

@@ -1,0 +1,52 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Create gradle wrapper jar-less bootstrap
+        working-directory: android
+        run: |
+          gradle wrapper --gradle-version 8.9 --no-daemon || true
+          gradle assembleRelease --no-daemon
+
+      - name: Rename artifacts
+        run: |
+          mkdir -p out
+          find android/app/build/outputs -name "*.apk" -exec cp {} out/ \;
+          ls -la out/
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-browser-android
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk

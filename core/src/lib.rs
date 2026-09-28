@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod session;
+pub mod stealth;
 #[cfg(test)]
 mod tests;
 
