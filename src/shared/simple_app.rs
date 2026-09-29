@@ -129,6 +129,7 @@ wrap_browser_process_handler! {
                 // SimpleHandler implements browser-level callbacks.
                 let handler = SimpleHandler::new(use_alloy_style);
                 crate::shared::remote::register(handler.clone());
+                crate::shared::remote::start();
                 let mut client = self.client.borrow_mut();
                 *client = Some(SimpleHandlerClient::new(handler));
             }

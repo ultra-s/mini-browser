@@ -58,6 +58,12 @@ impl TabManager {
         }
     }
 
+    pub fn set_url_for_active(&mut self, url: impl Into<String>) {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.active) {
+            tab.url = url.into();
+        }
+    }
+
     pub fn set_title_for_url(&mut self, url: &str, title: impl Into<String>) {
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.url == url) {
             tab.title = title.into();

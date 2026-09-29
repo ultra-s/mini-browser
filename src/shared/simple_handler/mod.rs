@@ -106,6 +106,13 @@ impl SimpleHandler {
             }
         );
 
+        // Track it as a tab in mini-core (remote API / session restore).
+        let url = browser
+            .main_frame()
+            .map(|f| CefString::from(&f.url()).to_string())
+            .unwrap_or_default();
+        self.track_new_tab(&url);
+
         // Add to the list of existing browsers.
         self.browser_list.push(browser);
     }
@@ -142,6 +149,20 @@ impl SimpleHandler {
         if self.browser_list.is_empty() {
             // All browser windows have closed. Quit the application message loop.
             quit_message_loop();
+        }
+    }
+
+    fn on_load_end(
+        &mut self,
+        browser: Option<&mut Browser>,
+        frame: Option<&mut Frame>,
+        _http_status_code: i32,
+    ) {
+        let url = frame
+            .map(|f| CefString::from(&f.url()).to_string())
+            .unwrap_or_default();
+        if !url.is_empty() && url != "about:blank" {
+            self.tabs.set_url_for_active(url);
         }
     }
 
@@ -357,6 +378,16 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
+        fn on_load_end(
+            &self,
+            browser: Option<&mut Browser>,
+            frame: Option<&mut Frame>,
+            http_status_code: i32,
+        ) {
+            let mut inner = self.inner.lock().expect("Failed to lock inner");
+            inner.on_load_end(browser, frame, http_status_code);
+        }
+
         fn on_load_error(
             &self,
             browser: Option<&mut Browser>,
