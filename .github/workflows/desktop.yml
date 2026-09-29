@@ -81,14 +81,24 @@ jobs:
           CEF_DIR="$HOME/.local/share/cef"
           # Only the files Chromium actually needs at runtime (keeps the release small and
           # avoids GitHub's per-file upload rate limit).
-          for f in libcef.so libcef_dll_wrapper libvk_swiftshader.so libvulkan.so.1 \
-                   icudtl.dat v8_context_snapshot.bin resources.pak \
-                   chrome_100_percent.pak chrome_200_percent.pak chrome-sandbox \
-                   vk_swiftshader_icd.json; do
-            [ -e "$CEF_DIR/$f" ] && cp "$CEF_DIR/$f" dist/ || true
-          done
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            for f in libcef.dll libcef.lib libvk_swiftshader.dll vulkan-1.dll \
+                     icudtl.dat v8_context_snapshot.bin resources.pak \
+                     chrome_100_percent.pak chrome_200_percent.pak \
+                     vk_swiftshader_icd.json d3dcompiler_47.dll; do
+              [ -e "$CEF_DIR/$f" ] && cp "$CEF_DIR/$f" dist/ || true
+            done
+          else
+            for f in libcef.so libvk_swiftshader.so libvulkan.so.1 \
+                     icudtl.dat v8_context_snapshot.bin resources.pak \
+                     chrome_100_percent.pak chrome_200_percent.pak chrome-sandbox \
+                     vk_swiftshader_icd.json; do
+              [ -e "$CEF_DIR/$f" ] && cp "$CEF_DIR/$f" dist/ || true
+            done
+          fi
           mkdir -p dist/locales
-          [ -f "$CEF_DIR/locales/en-US.pak" ] && cp "$CEF_DIR/locales/en-US.pak" dist/locales/
+          [ -f "$CEF_DIR/locales/en-US.pak" ] && cp "$CEF_DIR/locales/en-US.pak" dist/locales/ || true
+          ls -la dist/ | head -20
           # strip the fat debug symbols off libcef
           if [ "$RUNNER_OS" = "Linux" ]; then
             strip dist/libcef.so dist/v8_context_snapshot.bin 2>/dev/null || true
