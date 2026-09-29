@@ -45,6 +45,12 @@ pub struct SimpleHandler {
     browser_list: Vec<Browser>,
     is_closing: bool,
     tabs: TabManager,
+    /// Request URLs already tracked/attached by NewTabTask (so on_after_created skips them).
+    tabbed_handled: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// Browsers awaiting close (closed after the handler lock is released).
+    pending_close: Vec<Browser>,
+    /// Tab ids awaiting view detach (done after the handler lock is released).
+    pending_detach: Vec<u64>,
     weak_self: Weak<Mutex<Self>>,
 }
 
@@ -65,6 +71,9 @@ impl SimpleHandler {
                 is_alloy_style,
                 browser_list: Vec::new(),
                 is_closing: false,
+                tabbed_handled: std::cell::RefCell::new(std::collections::HashSet::new()),
+                pending_close: Vec::new(),
+                pending_detach: Vec::new(),
                 tabs: {
                     let mut tm = TabManager::new();
                     if let Some(p) = session_path() {
@@ -82,10 +91,19 @@ impl SimpleHandler {
         debug_assert_ne!(currently_on(ThreadId::UI), 0);
 
         let mut browser = browser.cloned();
+        let title_string = title.map(CefString::to_string).unwrap_or_default();
         if let Some(browser_view) = browser_view_get_for_browser(browser.as_mut()) {
             if let Some(window) = browser_view.window() {
                 window.set_title(title);
             }
+            // Track the page title into the tab manager (strip + agent API show real titles).
+            if let Some(frame) = browser.as_mut().and_then(|b| b.main_frame()) {
+                let url = CefString::from(&frame.url()).to_string();
+                if !url.is_empty() {
+                    self.tabs.set_title_for_url(&url, title_string);
+                }
+            }
+            crate::shared::tabbable::refresh();
         } else if self.is_alloy_style {
             platform_title_change(browser.as_mut(), title);
         }
@@ -106,14 +124,12 @@ impl SimpleHandler {
             }
         );
 
-        // Track it as a tab in mini-core (remote API / session restore).
-        let url = browser
-            .main_frame()
-            .map(|f| CefString::from(&f.url()).to_string())
-            .unwrap_or_default();
-        self.track_new_tab(&url);
+        // Tab tracking: startup browser is tracked where it is created (simple_app);
+        // NewTabTask tracks its own tabs. on_after_created only records the browser.
+        let _ = &browser;
 
-        // Add to the list of existing browsers.
+        // Add to the list of existing browsers. (Hosting in the tabbed window is done by
+        // NewTabTask; on_after_created only tracks startup/pop-up browsers.)
         self.browser_list.push(browser);
     }
 
@@ -158,7 +174,7 @@ impl SimpleHandler {
 
     fn on_load_end(
         &mut self,
-        browser: Option<&mut Browser>,
+        mut browser: Option<&mut Browser>,
         frame: Option<&mut Frame>,
         _http_status_code: i32,
     ) {
@@ -166,7 +182,12 @@ impl SimpleHandler {
             .map(|f| CefString::from(&f.url()).to_string())
             .unwrap_or_default();
         if !url.is_empty() && url != "about:blank" {
-            self.tabs.set_url_for_active(url);
+            // Update the URL on the tab this browser belongs to (not just the active one).
+            if let Some(tab_id) = browser.as_mut().and_then(|b| crate::shared::tabbable::tab_id_for_browser_inner(b)) {
+                self.tabs.set_url_for_tab(tab_id, url);
+            } else {
+                self.tabs.set_url_for_active(url);
+            }
         }
     }
 
@@ -252,6 +273,11 @@ impl SimpleHandler {
             return;
         }
 
+        // Last chance to persist the tab session (restore-on-startup reads it).
+        if let Some(p) = session_path() {
+            let _ = self.save_session(p);
+        }
+
         for browser in self.browser_list.iter() {
             let browser_host = browser.host().expect("BrowserHost is None");
             browser_host.close_browser(force_close.into());
@@ -319,6 +345,11 @@ impl SimpleHandler {
         &self.tabs
     }
 
+    /// Mark the tab active in tracked state (strip activation).
+    pub fn activate_tab(&mut self, tab_id: u64) {
+        self.tabs.set_active(tab_id);
+    }
+
     /// Navigate the most recent browser back (CEF history).
     pub fn go_back(&self) {
         if let Some(b) = self.browser_list.last() {
@@ -368,6 +399,44 @@ impl SimpleHandler {
     }
 
     /// Track a newly created browser as a tab in mini-core.
+    /// Record that NewTabTask already tracked + attached a browser for this URL.
+    pub fn mark_tabbed_handled(&self, url: &str) {
+        self.tabbed_handled.borrow_mut().insert(url.to_string());
+    }
+
+    /// Session restore: reopen saved tabs as real browser views. The active tab is displayed
+    /// by the startup window's own browser; the rest become background tabs.
+    pub fn restore_tabs_as_views(&mut self) {
+        // The startup browser (already created, showing the start page) belongs to the
+        // first tab; navigate it to the restored active tab's URL and spawn views for the rest.
+        let active_url = self
+            .tabs
+            .tabs()
+            .iter()
+            .find(|t| t.active)
+            .map(|t| t.url.clone());
+        let list: Vec<(u64, String)> = self
+            .tabs
+            .tabs()
+            .iter()
+            .filter(|t| !t.active)
+            .map(|t| (t.id, t.url.clone()))
+            .collect();
+        for (id, url) in list {
+            crate::shared::remote::spawn_restore_tab(url, id);
+        }
+        if let Some(url) = active_url {
+            if url != "mini://start" {
+                // Navigate the startup browser (first in the list) to the active restored tab.
+                if let Some(b) = self.browser_list.first() {
+                    if let Some(frame) = b.main_frame() {
+                        frame.load_url(Some(&CefString::from(url.as_str())));
+                    }
+                }
+            }
+        }
+    }
+
     pub fn track_new_tab(&mut self, url: &str) {
         self.tabs.open(url, false);
     }
@@ -377,24 +446,30 @@ impl SimpleHandler {
         if !self.tabs.tabs().iter().any(|t| t.id == tab_id) {
             return false;
         }
-        let tab_url = self
-            .tabs
-            .tabs()
-            .iter()
-            .find(|t| t.id == tab_id)
-            .map(|t| t.url.clone())
-            .unwrap_or_default();
         self.tabs.close(tab_id);
-        // tab.url identifies the browser window; close the matching browser.
-        if let Some(idx) = self
-            .browser_list
-            .iter()
-            .position(|b| b.main_frame().map(|f| CefString::from(&f.url()).to_string()) == Some(tab_url.clone()))
-        {
-            let mut b = self.browser_list.remove(idx);
-            b.host().map(|h| h.close_browser(true as _));
+        // Close the browser whose view is bound to this tab (identifier mapping is stable,
+        // URL matching is not). The startup browser (tab 0) can never be closed this way —
+        // closing it means closing the whole window.
+        let target = crate::shared::tabbable::browser_id_for_tab(tab_id);
+        if let Some(bid) = target {
+            // Remove from our list now; actually closing the browser happens after the
+            // handler lock is released (close_browser re-enters the handler callbacks).
+            if let Some(idx) = self.browser_list.iter().position(|b| b.identifier() == bid) {
+                self.pending_close.push(self.browser_list.remove(idx));
+            }
+            self.pending_detach.push(tab_id);
         }
         true
+    }
+
+    /// Take the browsers removed by close_tab. The caller must actually close them
+    /// AFTER dropping the handler lock (close_browser re-enters handler callbacks).
+    pub fn take_pending_close(&mut self) -> Vec<Browser> {
+        std::mem::take(&mut self.pending_close)
+    }
+
+    pub fn take_pending_detach(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.pending_detach)
     }
 }
 

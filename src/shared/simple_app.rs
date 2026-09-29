@@ -23,14 +23,21 @@ wrap_window_delegate! {
 
     impl WindowDelegate {
         fn on_window_created(&self, window: Option<&mut Window>) {
-            // Add the browser view and show the window.
+            // The tabbed shell is built eagerly by `ensure_shell` (called right after
+            // window creation). Fall back to a plain show for any window created later
+            // (e.g. the native-window path).
             let browser_view = self.browser_view.borrow();
             let (Some(window), Some(browser_view)) = (window, browser_view.as_ref()) else {
                 return;
             };
-            let mut view = View::from(browser_view);
-            window.add_child_view(Some(&mut view));
-
+            if crate::shared::tabbable::get().is_some() {
+                return;
+            }
+            crate::shared::tabbable::ensure_shell(
+                window,
+                self.initial_show_state,
+                Some((0, browser_view.clone())),
+            );
             if self.initial_show_state != ShowState::HIDDEN {
                 window.show();
             }
@@ -64,7 +71,7 @@ wrap_window_delegate! {
 }
 
 wrap_browser_view_delegate! {
-    struct SimpleBrowserViewDelegate {
+    pub struct SimpleBrowserViewDelegate {
         runtime_style: RuntimeStyle,
     }
 
@@ -115,15 +122,16 @@ wrap_browser_process_handler! {
         fn on_context_initialized(&self) {
             debug_assert_ne!(currently_on(ThreadId::UI), 0);
 
-            // Check if Alloy style will be used.
+            // Tabbed windows host multiple BrowserViews, so ALLOY style is required
+            // (CHROME style allows only one BrowserView per window).
             let command_line = command_line_get_global().expect("Failed to get command line");
-            let use_alloy_style =
-                command_line.has_switch(Some(&CefString::from("use-alloy-style"))) != 0;
-            let runtime_style = if use_alloy_style {
-                RuntimeStyle::ALLOY
-            } else {
-                RuntimeStyle::DEFAULT
-            };
+            // Tabbed windows host multiple BrowserViews per window: force ALLOY style
+            // for every view (CHROME style allows only one BrowserView per window).
+            if command_line.has_switch(Some(&CefString::from("use-alloy-style"))) == 0 {
+                command_line.append_switch(Some(&CefString::from("use-alloy-style")));
+            }
+            let use_alloy_style = true;
+            let runtime_style = RuntimeStyle::ALLOY;
 
             {
                 // SimpleHandler implements browser-level callbacks.
@@ -158,10 +166,31 @@ wrap_browser_process_handler! {
             } else {
                 url.as_str()
             };
-            let url = CefString::from(url);
+            let mut url_override: Option<String> = None;
+            // Track the startup tab: fresh start opens a start-page tab; with a restored
+            // session, reopen the saved tabs as real browser views and point the startup
+            // browser at the active restored tab's URL.
+            {
+                let handler = SimpleHandler::instance().expect("handler");
+                let mut h = handler.lock().unwrap();
+                if h.tabs().tabs().is_empty() {
+                    h.track_new_tab("mini://start");
+                } else {
+                    if let Some(active) = h.tabs().tabs().iter().find(|t| t.active) {
+                        let u = active.url.clone();
+                        if u != "mini://start" {
+                            url_override = Some(u);
+                        }
+                    }
+                    h.restore_tabs_as_views();
+                }
+            }
+            let url = CefString::from(url_override.as_deref().unwrap_or(url));
 
-            // Views is enabled by default (add `--use-native` to disable).
-            let use_views = command_line.has_switch(Some(&CefString::from("use-native"))) != 0;
+            // Views framework is required for the tabbed shell. (`--use-native` kept for
+            // debugging but views remains the default.)
+            let _ = &command_line;
+            let use_views = true;
 
             // If using Views create the browser using the Views framework, otherwise
             // create the browser using the native platform framework.
@@ -193,12 +222,35 @@ wrap_browser_process_handler! {
                 };
 
                 // Create the Window. It will show itself after creation.
+                // Which tab does the startup browser show? The active restored tab if a
+                // session was restored, otherwise the freshly tracked start-page tab (id 0).
+                let first_tab_id = SimpleHandler::instance()
+                    .map(|h| {
+                        h.lock()
+                            .unwrap()
+                            .tabs()
+                            .tabs()
+                            .iter()
+                            .find(|t| t.active)
+                            .map(|t| t.id)
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
                 let mut delegate = MiniWindowDelegate::new(
-                    RefCell::new(browser_view),
+                    RefCell::new(browser_view.clone()),
                     runtime_style,
                     initial_show_state,
                 );
-                window_create_top_level(Some(&mut delegate));
+                let window = window_create_top_level(Some(&mut delegate));
+                // Build the tabbed shell now: waiting for on_window_created is unreliable
+                // (under software rendering it can fire seconds later, after the first paint).
+                if let Some(mut window) = window {
+                    crate::shared::tabbable::ensure_shell(
+                        &mut window,
+                        initial_show_state,
+                        browser_view.map(|v| (first_tab_id, v)),
+                    );
+                }
             } else {
                 // Information used when creating the native window.
                 let window_info = WindowInfo {

@@ -3,6 +3,8 @@
 use cef::*;
 
 pub mod remote;
+pub mod tabbed_window;
+pub mod tabbable;
 pub mod resources;
 pub mod simple_app;
 pub mod simple_handler;
@@ -92,6 +94,9 @@ pub fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut
     // --- Engine switches ---------------------------------------------------
     if let Some(cmd) = command_line_get_global() {
         // GPU acceleration on by default (smooth scrolling, raster, WebGL).
+        // Force ALLOY runtime style: tabbed windows host multiple BrowserViews
+        // per window (CHROME style allows only one BrowserView per window).
+        cmd.append_switch(Some(&CefString::from("use-alloy-style")));
         cmd.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
         cmd.append_switch(Some(&CefString::from("enable-zero-copy")));
         cmd.append_switch(Some(&CefString::from("enable-smooth-scrolling")));

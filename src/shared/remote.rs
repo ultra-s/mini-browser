@@ -10,6 +10,9 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 static HANDLER: Mutex<Option<Arc<Mutex<SimpleHandler>>>> = Mutex::new(None);
+/// Retries for new-tab tasks that arrive before the tabbed shell is registered.
+static RETRIES: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(240);
+use std::sync::atomic::Ordering;
 /// Result of the latest /read: (sequence, visible text).
 static LAST_READ: Mutex<Option<(u64, String)>> = Mutex::new(None);
 /// Persisted browser data (bookmarks/settings). Lazy-init from the profile dir.
@@ -86,6 +89,106 @@ wrap_task! {
                 ShowState::NORMAL,
             );
             window_create_top_level(Some(&mut window_delegate));
+        }
+    }
+}
+
+/// Public handle so other modules can enqueue a new-tab task.
+pub fn spawn_new_tab(url: String) {
+    let mut task = NewTabTask::new(url, u64::MAX);
+    post_task(ThreadId::UI, Some(&mut task));
+}
+
+/// Re-open an already-tracked (restored) tab with a real browser view.
+pub fn spawn_restore_tab(url: String, tab_id: u64) {
+    let mut task = NewTabTask::new(url, tab_id);
+    post_task(ThreadId::UI, Some(&mut task));
+}
+
+/// Create a NEW TAB: attach a BrowserView to the existing tabbed window when one exists
+/// (real tabs), otherwise open a new window (headless / native-window fallback).
+wrap_task! {
+    struct NewTabTask {
+        url: String,
+        // Existing tab id (session restore): attach to it instead of creating a new tab.
+        restore_tab_id: u64,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            debug_assert_ne!(currently_on(ThreadId::UI), 0);
+            // Tabs must use ALLOY runtime style: CHROME style permits only one BrowserView
+            // per window ("Cannot add multiple Chrome style BrowserViews").
+            let url = if self.url == "mini://start" {
+                let cache = std::env::var("MINI_CACHE_DIR").unwrap_or_else(|_| {
+                    format!("{}/.mini-browser", std::env::var("HOME").unwrap_or_default())
+                });
+                format!("file://{cache}/start.html")
+            } else {
+                self.url.clone()
+            };
+            let url = CefString::from(url.as_str());
+            let mut client = crate::shared::simple_handler::SimpleHandlerClient::new(
+                SimpleHandler::instance().expect("handler"),
+            );
+            let mut view_delegate = crate::shared::simple_app::SimpleBrowserViewDelegate::new(
+                RuntimeStyle::ALLOY,
+            );
+            // If the tabbed shell isn't up yet (window not created), retry later WITHOUT
+            // creating a view (otherwise we'd leak one per retry).
+            if crate::shared::tabbable::get().is_none()
+                && RETRIES.fetch_sub(1, Ordering::SeqCst) > 0
+            {
+                let url = self.url.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    spawn_new_tab(url);
+                });
+                return;
+            }
+            // Pre-mark BEFORE creation: on_after_created can fire inside browser_view_create.
+            SimpleHandler::instance()
+                .expect("handler")
+                .lock()
+                .unwrap()
+                .mark_tabbed_handled(self.url.as_str());
+            let Some(browser_view) = browser_view_create(
+                Some(&mut client),
+                Some(&url),
+                Some(&BrowserSettings::default()),
+                None,
+                None,
+                Some(&mut view_delegate),
+            ) else {
+                    return;
+            };
+            // Track the tab + attach the view here (on_after_created is unreliable for
+            // secondary Alloy views — LifeSpan may never fire). Mark the browser handled so
+            // on_after_created won't double-track when it does fire.
+            let tracked_url = if self.restore_tab_id != u64::MAX {
+                // Session restore: the tab already exists — just bind this view to it.
+                self.restore_tab_id
+            } else {
+                let handler = SimpleHandler::instance().expect("handler");
+                let mut h = handler.lock().unwrap();
+                let pseudo = if self.url == "mini://start" { "mini://start".to_string() } else { self.url.clone() };
+                h.track_new_tab(&pseudo);
+                let tab_id = h.tabs().tabs().last().map(|t| t.id).unwrap_or(0);
+                let _ = &browser_view;
+                h.mark_tabbed_handled(&pseudo);
+                tab_id
+            };
+            if crate::shared::tabbable::get().is_some() {
+                crate::shared::tabbable::attach_view(tracked_url, browser_view);
+            } else {
+                // No tabbed window (native-window fallback): open a new top-level window.
+                let mut window_delegate = crate::shared::simple_app::MiniWindowDelegate::new(
+                    std::cell::RefCell::new(Some(browser_view)),
+                    RuntimeStyle::ALLOY,
+                    ShowState::NORMAL,
+                );
+                window_create_top_level(Some(&mut window_delegate));
+            }
         }
     }
 }
@@ -209,7 +312,21 @@ wrap_task! {
     impl Task {
         fn execute(&self) {
             if let Some(h) = SimpleHandler::instance() {
-                h.lock().unwrap().close_tab(self.tab_id);
+                // Close under lock-free conditions: collect the browser first, then close it
+                // (closing re-enters the handler callbacks).
+                let (browsers, detaches) = {
+                    let mut g = h.lock().unwrap();
+                    g.close_tab(self.tab_id);
+                    (g.take_pending_close(), g.take_pending_detach())
+                };
+                // Removing the view from the strip destroys the browser with it; close
+                // only browsers that survive (no view attached).
+                for id in detaches {
+                    crate::shared::tabbable::detach_tab(id);
+                }
+                for mut b in browsers {
+                    b.host().map(|host| host.close_browser(true as _));
+                }
             }
         }
     }
@@ -340,7 +457,7 @@ fn handle_request(mut stream: std::net::TcpStream) {
     let (status, body) = match (method, path.split('?').next().unwrap_or(path)) {
         ("POST", "/open") => match query_param(path, "url") {
             Some(url) if !url.is_empty() => {
-                let mut task = OpenUrl::new(url);
+                let mut task = NewTabTask::new(url, u64::MAX);
                 post_task(ThreadId::UI, Some(&mut task));
                 ("200 OK", r#"{"ok":true}"#.to_string())
             }
@@ -543,7 +660,8 @@ fn handle_request(mut stream: std::net::TcpStream) {
         // New tab: opens a fresh browser window with the start page (or given url).
         ("POST", "/new") => {
             let url = query_param(path, "url").unwrap_or_default();
-            let mut task = OpenUrl::new(if url.is_empty() { "mini://start".into() } else { url });
+            let mut task =
+                NewTabTask::new(if url.is_empty() { "mini://start".into() } else { url }, u64::MAX);
             post_task(ThreadId::UI, Some(&mut task));
             ("200 OK", r#"{"ok":true}"#.to_string())
         }
