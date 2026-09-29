@@ -147,6 +147,10 @@ impl SimpleHandler {
         }
 
         if self.browser_list.is_empty() {
+            // Last window closed: persist tabs before quitting (session restore).
+            if let Some(p) = session_path() {
+                let _ = self.save_session(p);
+            }
             // All browser windows have closed. Quit the application message loop.
             quit_message_loop();
         }
@@ -310,9 +314,39 @@ impl SimpleHandler {
         true
     }
 
+    /// The most recently created browser (for remote API reads).
+    pub fn active_browser(&self) -> Option<Browser> {
+        self.browser_list.last().cloned()
+    }
+
     /// Track a newly created browser as a tab in mini-core.
     pub fn track_new_tab(&mut self, url: &str) {
         self.tabs.open(url, false);
+    }
+
+    /// Close the tab with the given mini-core id (remote API /close).
+    pub fn close_tab(&mut self, tab_id: u64) -> bool {
+        if !self.tabs.tabs().iter().any(|t| t.id == tab_id) {
+            return false;
+        }
+        let tab_url = self
+            .tabs
+            .tabs()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .map(|t| t.url.clone())
+            .unwrap_or_default();
+        self.tabs.close(tab_id);
+        // tab.url identifies the browser window; close the matching browser.
+        if let Some(idx) = self
+            .browser_list
+            .iter()
+            .position(|b| b.main_frame().map(|f| CefString::from(&f.url()).to_string()) == Some(tab_url.clone()))
+        {
+            let mut b = self.browser_list.remove(idx);
+            b.host().map(|h| h.close_browser(true as _));
+        }
+        true
     }
 }
 

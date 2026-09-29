@@ -81,7 +81,7 @@
     font-size: 11px; letter-spacing: .3em; color: var(--glow-2);
     border: 1px solid var(--glow-2); padding: 6px 12px; border-radius: 999px;
   }
-  body.stealth .stealth { display: block; }
+  .stealth.on { display: block; }
 </style>
 </head>
 <body>
@@ -103,11 +103,15 @@
       <a href="https://mail.proton.me">proton</a>
     </nav>
     <footer>run <span>mini-agent</span> from a terminal to drive this browser — try <span>mini-agent open example.com</span></footer>
-  </main>
+  
+  <button id="newtab" title="new tab" style="position:fixed;bottom:20px;right:20px;background:transparent;border:1px solid var(--ink-2);color:var(--ink-1);border-radius:999px;width:44px;height:44px;font-size:22px;cursor:pointer">+</button>
+</main>
 <script>
-  // stealth hint via query flag passed by the shell
+  // stealth hint via query flag: toggle the badge VISIBILITY only (no body class changes —
+  // some software-rendering CEF builds lose frame presentation when body classes mutate post-load)
   if (new URLSearchParams(location.search).get('stealth') === '1') {
-    document.body.classList.add('stealth');
+    var b = document.querySelector('.stealth');
+    if (b) b.style.display = 'block';
   }
   function go() {
     let v = document.getElementById('q').value.trim();
@@ -117,6 +121,10 @@
                      : 'https://duckduckgo.com/?q=' + encodeURIComponent(v);
   }
   document.querySelector('form').addEventListener('submit', e => { e.preventDefault(); go(); });
+
+  document.getElementById('newtab').addEventListener('click', function () {
+    fetch('http://127.0.0.1:9777/new', {method:'POST'}).catch(function(){});
+  });
 </script>
 </body>
 </html>

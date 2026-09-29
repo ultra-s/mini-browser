@@ -10,6 +10,26 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 static HANDLER: Mutex<Option<Arc<Mutex<SimpleHandler>>>> = Mutex::new(None);
+/// Result of the latest /read: (sequence, visible text).
+static LAST_READ: Mutex<Option<(u64, String)>> = Mutex::new(None);
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
 
 pub fn register(handler: Arc<Mutex<SimpleHandler>>) {
     *HANDLER.lock().unwrap() = Some(handler);
@@ -87,6 +107,53 @@ wrap_task! {
         fn execute(&self) {
             if let Some(h) = SimpleHandler::instance() {
                 h.lock().unwrap().eval_active(&self.js);
+            }
+        }
+    }
+}
+
+wrap_string_visitor! {
+    struct TextGrab {
+        seq: u64,
+    }
+
+    impl CefStringVisitor {
+        fn visit(&self, string: Option<&CefString>) {
+            let text = string.map(CefString::to_string).unwrap_or_default();
+            *LAST_READ.lock().unwrap() = Some((self.seq, text));
+        }
+    }
+}
+
+wrap_task! {
+    struct ReadActive {
+        seq: u64,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(h) = SimpleHandler::instance() {
+                let h = h.lock().unwrap();
+                if let Some(browser) = h.active_browser() {
+                    if let Some(frame) = browser.main_frame() {
+                        let mut v = TextGrab::new(self.seq);
+                        frame.text(Some(&mut v));
+                    }
+                }
+            }
+        }
+    }
+}
+
+wrap_task! {
+    struct CloseTab {
+        tab_id: u64,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(h) = SimpleHandler::instance() {
+                h.lock().unwrap().close_tab(self.tab_id);
             }
         }
     }
@@ -187,6 +254,47 @@ fn handle_request(mut stream: std::net::TcpStream) {
             ("200 OK", r#"{"ok":true}"#.to_string())
         }
         ("GET", "/health") => ("200 OK", r#"{"ok":true,"app":"mini-browser"}"#.to_string()),
+        // ReadActiveTab: fetch visible text of the active tab. The JS result arrives
+        // asynchronously via a StringVisitor; poll LAST_READ until it changes or timeout.
+        ("GET", "/read") => {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static READ_SEQ: AtomicU64 = AtomicU64::new(0);
+            *LAST_READ.lock().unwrap() = None;
+            let seq = READ_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+            let mut task = ReadActive::new(seq);
+            post_task(ThreadId::UI, Some(&mut task));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3000);
+            loop {
+                {
+                    let slot = LAST_READ.lock().unwrap();
+                    if let Some((s, text)) = slot.as_ref() {
+                        if *s == seq {
+                            let body = format!(r#"{{"ok":true,"text":{}}}"#, json_escape(text));
+                            break ("200 OK", body);
+                        }
+                    }
+                }
+                if std::time::Instant::now() > deadline {
+                    break ("504 Gateway Timeout", r#"{"error":"read timeout"}"#.to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        // New tab: opens a fresh browser window with the start page (or given url).
+        ("POST", "/new") => {
+            let url = query_param(path, "url").unwrap_or_default();
+            let mut task = OpenUrl::new(if url.is_empty() { "mini://start".into() } else { url });
+            post_task(ThreadId::UI, Some(&mut task));
+            ("200 OK", r#"{"ok":true}"#.to_string())
+        }
+        ("POST", "/close") => match query_param(path, "tab").and_then(|t| t.parse::<u64>().ok()) {
+            Some(id) => {
+                let mut task = CloseTab::new(id);
+                post_task(ThreadId::UI, Some(&mut task));
+                ("200 OK", r#"{"ok":true}"#.to_string())
+            }
+            _ => ("400 Bad Request", r#"{"error":"missing tab"}"#.to_string()),
+        },
         _ => ("404 Not Found", r#"{"error":"not found"}"#.to_string()),
     };
 
