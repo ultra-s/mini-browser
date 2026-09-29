@@ -146,7 +146,8 @@ jobs:
             f="${f#./}"
             mkdir -p "../../rel/$(dirname "$f")"
             if [ -f "../../rel/$f" ]; then
-              cp "$f" "../../rel/win-$f"
+              dir=$(dirname "$f"); base=$(basename "$f")
+              cp "$f" "../../rel/$dir/win-$base"
             else
               cp "$f" "../../rel/$f"
             fi
