@@ -61,6 +61,7 @@ jobs:
           git add android/app/build.gradle.kts
           git diff --cached --quiet || git commit -m "release: v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
+          git pull --rebase origin ${{ github.ref_name }} || true
           git push origin HEAD:${{ github.ref_name }} "v${{ steps.bump.outputs.version }}"
 
       - name: Write release notes
