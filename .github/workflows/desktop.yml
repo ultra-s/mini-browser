@@ -97,11 +97,7 @@ jobs:
           fi
           # launcher so LD_LIBRARY_PATH just works
           if [ "$RUNNER_OS" = "Linux" ]; then
-            printf '#!/bin/bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-export LD_LIBRARY_PATH="$DIR:$LD_LIBRARY_PATH"
-exec "$DIR/mini-browser" "$@"
-' > dist/mini-browser-run
+            printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "$0")" && pwd)"' 'export LD_LIBRARY_PATH="$DIR:$LD_LIBRARY_PATH"' 'exec "$DIR/mini-browser" "$@"' > dist/mini-browser-run
             chmod +x dist/mini-browser-run
           fi
           du -sh dist
