@@ -79,14 +79,16 @@ jobs:
         shell: bash
         run: |
           CEF_DIR="$HOME/.local/share/cef"
-          # copy runtime files the binary needs (skip dev headers/cmake)
-          for f in "$CEF_DIR"/*; do
-            base=$(basename "$f")
-            case "$base" in
-              cmake|CMakeLists.txt|libcef_dll|archive.json) continue ;;
-            esac
-            cp -r "$f" dist/
+          # Only the files Chromium actually needs at runtime (keeps the release small and
+          # avoids GitHub's per-file upload rate limit).
+          for f in libcef.so libcef_dll_wrapper libvk_swiftshader.so libvulkan.so.1 \
+                   icudtl.dat v8_context_snapshot.bin resources.pak \
+                   chrome_100_percent.pak chrome_200_percent.pak chrome-sandbox \
+                   vk_swiftshader_icd.json; do
+            [ -e "$CEF_DIR/$f" ] && cp "$CEF_DIR/$f" dist/ || true
           done
+          mkdir -p dist/locales
+          [ -f "$CEF_DIR/locales/en-US.pak" ] && cp "$CEF_DIR/locales/en-US.pak" dist/locales/
           # strip the fat debug symbols off libcef
           if [ "$RUNNER_OS" = "Linux" ]; then
             strip dist/libcef.so dist/v8_context_snapshot.bin 2>/dev/null || true

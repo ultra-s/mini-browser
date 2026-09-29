@@ -132,22 +132,26 @@ jobs:
           name: mini-browser-x86_64-pc-windows-msvc
           path: out/windows
 
-      - name: Flatten assets (prefix colliding files per-OS)
+      - name: Flatten assets (relative paths kept; windows prefixed on collision)
         run: |
           mkdir -p rel
           find out/android -name "*.apk" -exec cp {} rel/ \;
-          # Linux files first (canonical names)
-          find out/linux -type f -exec cp {} rel/ \;
-          # Windows files: prefix with win- only when the name already exists
-          while IFS= read -r f; do
-            base=$(basename "$f")
-            if [ -f "rel/$base" ]; then
-              cp "$f" "rel/win-$base"
+          cd out/linux
+          find . -type f | while read -r f; do
+            mkdir -p "../../rel/$(dirname "$f")"
+            cp "$f" "../../rel/$f"
+          done
+          cd ../windows
+          find . -type f | while read -r f; do
+            mkdir -p "../../rel/$(dirname "$f")"
+            if [ -f "../../rel/$f" ]; then
+              cp "$f" "../../rel/win-$f"
             else
-              cp "$f" "rel/$base"
+              cp "$f" "../../rel/$f"
             fi
-          done < <(find out/windows -type f)
-          ls -la rel/ | head -30
+          done
+          cd ../..
+          find rel -type f | head -30
 
       - name: Publish versioned release (rate-limit safe)
         uses: softprops/action-gh-release@v2
