@@ -275,7 +275,7 @@ class MainActivity : Activity() {
 
     private fun omniboxBg(focused: Boolean): android.graphics.drawable.GradientDrawable {
         val d = android.graphics.drawable.GradientDrawable()
-        d.cornerRadius = dp(23)
+        d.cornerRadius = dp(23).toFloat()
         if (focused) {
             d.setColor(0xFF14131B.toInt())
             d.setStroke(dp(2), MiniUi.GLOW_A)
@@ -305,10 +305,11 @@ class MainActivity : Activity() {
     private var findMode = false
     private fun showFindBar() {
         findMode = true
-        omnibox.setTextExternal("")
+        omnibox.setText("")
         omnibox.hint = "Find in page"
         omnibox.requestFocus()
-        omnibox.showKeyboard()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        imm.showSoftInput(omnibox, 0)
     }
 
     private fun endFind() {
@@ -472,7 +473,7 @@ class MainActivity : Activity() {
     private inner class MiniChrome : WebChromeClient() {
         override fun onProgressChanged(view: WebView?, newProgress: Int) {
             progress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
-            progress.progress = newProgress
+            progress.fraction = newProgress / 100f
         }
         override fun onPermissionRequest(request: PermissionRequest) {
             runOnUiThread {
