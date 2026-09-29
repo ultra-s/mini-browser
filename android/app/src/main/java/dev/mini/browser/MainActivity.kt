@@ -54,7 +54,7 @@ class MainActivity : Activity() {
     private lateinit var progress: MiniProgress
     private lateinit var securityChip: MiniIconButton
     private lateinit var tabStripRow: LinearLayout
-    private lateinit var stealthBadge: MiniIconButton
+    private lateinit var stealthBadge: TextView
 
     private val tabs = mutableListOf<WebView>()
     private val tabTitles = mutableListOf<String>()
@@ -143,9 +143,6 @@ class MainActivity : Activity() {
         progress = MiniProgress(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP)
-            max = 100
-            progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF7A45"))
-            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(Color.TRANSPARENT)
             visibility = View.GONE
         }
         root.addView(progress)
@@ -206,7 +203,7 @@ class MainActivity : Activity() {
         }
         topChrome.addView(tabStrip)
 
-        stealthBadge = TextView(this).apply {
+        stealthBadge = TextView(this).apply {  // keep TextView: label, not button
             text = "● S T E A L T H"
             setTextColor(MiniUi.GLOW_B); textSize = 10f; letterSpacing = 0.25f
             visibility = if (stealth) View.VISIBLE else View.GONE
@@ -263,7 +260,7 @@ class MainActivity : Activity() {
         val url = webView.url ?: return
         val secure = url.startsWith("https://")
         sheet.show("Site", listOf(
-            MiniSheet.Row(if (secure) "🔒" else "⚠", url.take(40)) { omnibox.setTextExternal(url); omnibox.requestFocus(); omnibox.showKeyboard() },
+            MiniSheet.Row(if (secure) "🔒" else "⚠", url.take(40)) { omnibox.setText(url); omnibox.requestFocus() },
             MiniSheet.Row("★", if (store.isBookmarked(url)) "Remove bookmark" else "Add bookmark") {
                 if (store.isBookmarked(url)) store.removeBookmark(url) else store.addBookmark(webView.title ?: url, url)
                 toast.show("Done")
@@ -278,13 +275,13 @@ class MainActivity : Activity() {
 
     private fun omniboxBg(focused: Boolean): android.graphics.drawable.GradientDrawable {
         val d = android.graphics.drawable.GradientDrawable()
-        d.cornerRadius = dp(23f)
+        d.cornerRadius = dp(23)
         if (focused) {
             d.setColor(0xFF14131B.toInt())
-            d.setStroke(dp(1.6f).toInt(), MiniUi.GLOW_A)
+            d.setStroke(dp(2), MiniUi.GLOW_A)
         } else {
             d.setColor(0xFF1E1C27.toInt())
-            d.setStroke(dp(1f).toInt(), 0x22FFFFFF)
+            d.setStroke(dp(1), 0x22FFFFFF)
         }
         return d
     }
