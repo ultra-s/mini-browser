@@ -3,7 +3,6 @@ package dev.mini.browser
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
@@ -30,9 +29,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
-import android.widget.Toast
 
 /**
  * Mini for Android — full-featured, fast, clean.
@@ -54,10 +51,10 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var webView: WebView
     private lateinit var omnibox: EditText
-    private lateinit var progress: ProgressBar
-    private lateinit var securityChip: TextView
+    private lateinit var progress: MiniProgress
+    private lateinit var securityChip: MiniIconButton
     private lateinit var tabStripRow: LinearLayout
-    private lateinit var stealthBadge: TextView
+    private lateinit var stealthBadge: MiniIconButton
 
     private val tabs = mutableListOf<WebView>()
     private val tabTitles = mutableListOf<String>()
@@ -66,6 +63,8 @@ class MainActivity : Activity() {
     private var desktopMode = false
     private var pendingWebPermission: PermissionRequest? = null
     private lateinit var store: MiniStore
+    private lateinit var sheet: MiniSheet
+    private lateinit var toast: MiniToast
     private var pendingDownloadUrl: String? = null
     private var pendingDownloadDisposition: String? = null
     private var pendingDownloadMime: String? = null
@@ -74,6 +73,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         stealth = intent.getBooleanExtra("stealth", false)
         store = MiniStore(this)
+        sheet = MiniSheet(this)
+        (window.decorView as ViewGroup).post { (window.decorView as ViewGroup).addView(sheet, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT) }
+        toast = MiniToast(this)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         buildUi()
         restoreOrHome()
@@ -138,7 +140,7 @@ class MainActivity : Activity() {
         root.addView(webView, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
-        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+        progress = MiniProgress(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(3), Gravity.TOP)
             max = 100
@@ -159,30 +161,37 @@ class MainActivity : Activity() {
         val omniboxRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
 
-        securityChip = TextView(this).apply {
-            text = "🔒"; textSize = 13f; setPadding(dp(6), 0, dp(6), 0) }
+        securityChip = MiniIconButton(this, "🔒", 38f) { showSiteInfo() }
         omniboxRow.addView(securityChip)
 
         omnibox = EditText(this).apply {
             hint = "Search or type URL"
             setSingleLine()
             imeOptions = EditorInfo.IME_ACTION_GO or EditorInfo.IME_FLAG_NO_EXTRACT_UI
-            setTextColor(Color.parseColor("#E9E6F0"))
-            setHintTextColor(Color.parseColor("#6B6675"))
-            setBackgroundColor(Color.parseColor("#1E1C26"))
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setTextColor(MiniUi.TEXT)
+            setHintTextColor(MiniUi.DIM)
+            background = omniboxBg(false)
+            setPadding(dp(18), dp(13), dp(18), dp(13))
+            textSize = 15f
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnFocusChangeListener { _, has -> background = omniboxBg(has) }
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {
+                    if (findMode) webView.findAllAsync(s?.toString() ?: "")
+                }
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            })
             setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_GO) { go(omnibox.text.toString()); true } else false
+                if (action == EditorInfo.IME_ACTION_GO) {
+                    if (findMode) endFind() else go(omnibox.text.toString())
+                    true
+                } else false
             }
         }
         omniboxRow.addView(omnibox)
 
-        val refresh = TextView(this).apply {
-            text = "⟳"; textSize = 18f; setPadding(dp(10), 0, dp(4), 0)
-            setTextColor(Color.parseColor("#8B8798"))
-            setOnClickListener { if (webView.url != null) webView.reload() }
-        }
+        val refresh = MiniIconButton(this, "⟳", 40f) { if (webView.url != null) webView.reload() }
         omniboxRow.addView(refresh)
         topChrome.addView(omniboxRow)
 
@@ -198,8 +207,8 @@ class MainActivity : Activity() {
         topChrome.addView(tabStrip)
 
         stealthBadge = TextView(this).apply {
-            text = "● STEALTH"
-            setTextColor(Color.parseColor("#B06CFF")); textSize = 10f; letterSpacing = 0.2f
+            text = "● S T E A L T H"
+            setTextColor(MiniUi.GLOW_B); textSize = 10f; letterSpacing = 0.25f
             visibility = if (stealth) View.VISIBLE else View.GONE
             setPadding(0, dp(4), 0, dp(2))
         }
@@ -213,11 +222,8 @@ class MainActivity : Activity() {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(52), Gravity.BOTTOM)
         }
-        fun tb(label: String, onTap: () -> Unit) = TextView(this).apply {
-            text = label; textSize = 20f; gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#C9C5D4"))
+        fun tb(label: String, onTap: () -> Unit) = MiniIconButton(this, label, 48f) { onTap() }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-            setOnClickListener { onTap() }
         }
         bottomBar.addView(tb("‹") { if (webView.canGoBack()) webView.goBack() })
         bottomBar.addView(tb("›") { if (webView.canGoForward()) webView.goForward() })
@@ -235,38 +241,83 @@ class MainActivity : Activity() {
         val bm = if (url.isNotEmpty() && store.isBookmarked(url)) "Remove bookmark" else "Add bookmark"
         val items = listOf(
             bm to { if (store.isBookmarked(url)) store.removeBookmark(url) else store.addBookmark(title, url) },
-            "Save to reading list" to { store.addReading(title, url); Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show() },
+            "Save to reading list" to { store.addReading(title, url); toast.show("Saved") },
             "Bookmarks" to { showList("Bookmarks") { store.bookmarks() } },
-            "History" to { if (stealth) Toast.makeText(this, "No history in stealth", Toast.LENGTH_SHORT).show() else showList("History") { store.history() } },
+            "History" to { if (stealth) toast.show("No history in stealth") else showList("History") { store.history() } },
             "Reading list" to { showList("Reading list") { store.readingList() } },
             "Search engine: " + store.searchEngine.uppercase() to { cycleEngine() },
             "Export data" to { exportData() },
-            "Wipe all data" to { store.wipeAll(); purgeEverything(); Toast.makeText(this, "All data wiped", Toast.LENGTH_SHORT).show() },
+            "Wipe all data" to { store.wipeAll(); purgeEverything(); toast.show("All data wiped") },
             "New tab" to { newTab(store.homePage) },
             if (desktopMode) "Mobile site" to { toggleDesktopMode(false) }
             else "Desktop site" to { toggleDesktopMode(true) },
             "Find in page" to { showFindBar() },
             "New stealth tab" to { startStealthTab() },
             "Share" to { sharePage() },
-            "Purge data" to { purgeEverything(); Toast.makeText(this, "Data purged", Toast.LENGTH_SHORT).show() }
+            "Purge data" to { purgeEverything(); toast.show("Data purged") }
         )
-        val labels = items.map { it.first }.toTypedArray()
-        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Mini")
-            .setItems(labels) { _, which -> items[which].second() }
-            .show()
+        sheet.show("Mini", items.map { (label, act) -> MiniSheet.Row(iconFor(label), label) { act() } })
     }
 
+    private fun showSiteInfo() {
+        val url = webView.url ?: return
+        val secure = url.startsWith("https://")
+        sheet.show("Site", listOf(
+            MiniSheet.Row(if (secure) "🔒" else "⚠", url.take(40)) { omnibox.setTextExternal(url); omnibox.requestFocus(); omnibox.showKeyboard() },
+            MiniSheet.Row("★", if (store.isBookmarked(url)) "Remove bookmark" else "Add bookmark") {
+                if (store.isBookmarked(url)) store.removeBookmark(url) else store.addBookmark(webView.title ?: url, url)
+                toast.show("Done")
+            },
+            MiniSheet.Row("⧉", "Copy link") {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("url", url))
+                toast.show("Copied")
+            }
+        ))
+    }
+
+    private fun omniboxBg(focused: Boolean): android.graphics.drawable.GradientDrawable {
+        val d = android.graphics.drawable.GradientDrawable()
+        d.cornerRadius = dp(23f)
+        if (focused) {
+            d.setColor(0xFF14131B.toInt())
+            d.setStroke(dp(1.6f).toInt(), MiniUi.GLOW_A)
+        } else {
+            d.setColor(0xFF1E1C27.toInt())
+            d.setStroke(dp(1f).toInt(), 0x22FFFFFF)
+        }
+        return d
+    }
+
+    private fun iconFor(label: String): String = when {
+        label.contains("bookmark", true) -> "★"
+        label.contains("reading", true) -> "≡"
+        label.contains("history", true) -> "⟲"
+        label.contains("engine", true) -> "⌕"
+        label.contains("export", true) -> "↥"
+        label.contains("wipe", true) || label.contains("purge", true) -> "⌫"
+        label.contains("new tab", true) -> "＋"
+        label.contains("stealth", true) -> "◈"
+        label.contains("desktop", true) -> "▣"
+        label.contains("find", true) -> "⌕"
+        label.contains("share", true) -> "↗"
+        label.contains("download", true) -> "↓"
+        else -> "◆"
+    }
+
+    private var findMode = false
     private fun showFindBar() {
-        val input = EditText(this).apply {
-            hint = "Find in page"; setSingleLine()
-            setPadding(dp(14), dp(10), dp(14), dp(10)) }
-        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Find in page")
-            .setView(input)
-            .setPositiveButton("Find") { _, _ -> webView.findAllAsync(input.text.toString()) }
-            .setNegativeButton("Close") { _, _ -> webView.clearMatches() }
-            .show()
+        findMode = true
+        omnibox.setTextExternal("")
+        omnibox.hint = "Find in page"
+        omnibox.requestFocus()
+        omnibox.showKeyboard()
+    }
+
+    private fun endFind() {
+        findMode = false
+        omnibox.hint = "Search or enter address"
+        webView.clearMatches()
     }
 
     private fun sharePage() {
@@ -323,8 +374,8 @@ class MainActivity : Activity() {
                 text = ("⧉ " + tabTitles[i]).take(24) + if (i == currentTab) " ●" else ""
                 textSize = 12f
                 setPadding(dp(12), dp(6), dp(12), dp(6))
-                setTextColor(if (i == currentTab) Color.parseColor("#FF7A45") else Color.parseColor("#8B8798"))
-                setBackgroundColor(if (i == currentTab) Color.parseColor("#2A2833") else Color.TRANSPARENT)
+                setTextColor(if (i == currentTab) MiniUi.GLOW_A else MiniUi.DIM)
+                background = MiniUi.rounded(this@MainActivity, if (i == currentTab) MiniUi.INK2 else Color.TRANSPARENT, 16f)
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginEnd = dp(6)
@@ -378,28 +429,24 @@ class MainActivity : Activity() {
             setMimeType(mime ?: "application/octet-stream")
         }
         (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
-        Toast.makeText(this, "Downloading…", Toast.LENGTH_SHORT).show()
+        toast.show("Downloading…")
     }
 
     private fun showList(title: String, source: () -> org.json.JSONArray) {
         val arr = source()
-        if (arr.length() == 0) { Toast.makeText(this, "Empty", Toast.LENGTH_SHORT).show(); return }
+        if (arr.length() == 0) { toast.show("Empty"); return }
         val entries = (0 until arr.length()).map { arr.getJSONObject(it) }.reversed().take(50)
-        val labels = entries.map { e -> (e.optString("title").ifEmpty { e.optString("url") }).take(48) }.toTypedArray()
-        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle(title)
-            .setItems(labels) { _, which ->
-                val u = entries[which].optString("url")
-                if (u.isNotEmpty()) go(u)
-            }
-            .show()
+        sheet.show(title, entries.map { e ->
+            val u = e.optString("url")
+            MiniSheet.Row("◇", (e.optString("title").ifEmpty { u }).take(44)) { if (u.isNotEmpty()) go(u) }
+        })
     }
 
     private fun cycleEngine() {
         val engines = listOf("ddg", "google", "bing", "brave")
         val next = engines[(engines.indexOf(store.searchEngine) + 1) % engines.size]
         store.searchEngine = next
-        Toast.makeText(this, "Search: $next", Toast.LENGTH_SHORT).show()
+        toast.show("Search: $next")
     }
 
     private fun exportData() {
@@ -407,9 +454,9 @@ class MainActivity : Activity() {
             val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             dir.mkdirs()
             java.io.File(dir, "mini-export.json").writeText(store.exportJson())
-            Toast.makeText(this, "Exported to Downloads/mini-export.json", Toast.LENGTH_LONG).show()
+            toast.show("Exported to Downloads/mini-export.json")
         } catch (e: Exception) {
-            Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show()
+            toast.show("Export failed")
         }
     }
 
@@ -417,7 +464,8 @@ class MainActivity : Activity() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
         override fun onPageFinished(view: WebView, url: String) {
             omnibox.setText(url)
-            securityChip.text = if (url.startsWith("https://") || url.startsWith("file://")) "🔒" else "⚠"
+            securityChip.glyph = if (url.startsWith("https://") || url.startsWith("file://")) "🔒" else "⚠"
+            securityChip.invalidate()
             tabTitles[currentTab] = view.title ?: "Tab"
             refreshTabStrip()
             if (!stealth && url.startsWith("http")) store.addHistory(view.title ?: url, url)
@@ -441,13 +489,14 @@ class MainActivity : Activity() {
             }
         }
         override fun onGeolocationPermissionsShowPrompt(origin: String?, callback: android.webkit.GeolocationPermissions.Callback?) {
-            if (stealth) callback?.invoke(origin, false, false)
-            else AlertDialog.Builder(this@MainActivity, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("Location")
-                .setMessage("Allow $origin to know your location?")
-                .setPositiveButton("Allow") { _, _ -> callback?.invoke(origin, true, false) }
-                .setNegativeButton("Block") { _, _ -> callback?.invoke(origin, false, false) }
-                .show()
+            if (stealth) { callback?.invoke(origin, false, false); return }
+            val o = origin ?: ""
+            runOnUiThread {
+                sheet.show("Location", listOf(
+                    MiniSheet.Row("✓", "Allow $o to know your location".take(44)) { callback?.invoke(o, true, false) },
+                    MiniSheet.Row("✕", "Block") { callback?.invoke(o, false, false) }
+                ))
+            }
         }
     }
 
