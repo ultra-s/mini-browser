@@ -5,6 +5,96 @@ use std::path::Path;
 
 pub type TabId = u64;
 
+/// A saved bookmark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub title: String,
+    pub url: String,
+    pub created_at: u64,
+}
+
+/// Persisted browser data (bookmarks + settings). Path:
+/// `$MINI_CACHE_DIR/mini-data.json` (skipped entirely in stealth mode).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserData {
+    #[serde(default)]
+    pub bookmarks: Vec<Bookmark>,
+    #[serde(default)]
+    pub homepage: String,
+    #[serde(default)]
+    pub search_engine: String,
+    #[serde(default = "default_true")]
+    pub cookies_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for BrowserData {
+    fn default() -> Self {
+        Self {
+            bookmarks: Vec::new(),
+            homepage: String::new(),
+            search_engine: String::new(),
+            cookies_enabled: true,
+        }
+    }
+}
+
+impl BrowserData {
+    pub fn load(path: &Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, path: &Path) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(path, json);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+
+    /// Add a bookmark, replacing any existing entry with the same URL. Returns false on invalid URL.
+    pub fn add_bookmark(&mut self, title: &str, url: &str) -> bool {
+        if url.is_empty() || url == "about:blank" {
+            return false;
+        }
+        self.bookmarks.retain(|b| b.url != url);
+        self.bookmarks.push(Bookmark {
+            title: if title.is_empty() {
+                url.to_string()
+            } else {
+                title.to_string()
+            },
+            url: url.to_string(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        });
+        if self.bookmarks.len() > 5000 {
+            self.bookmarks.remove(0);
+        }
+        true
+    }
+
+    pub fn remove_bookmark(&mut self, url: &str) -> bool {
+        let n = self.bookmarks.len();
+        self.bookmarks.retain(|b| b.url != url);
+        self.bookmarks.len() != n
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NavHistory {
     pub back: Vec<String>,

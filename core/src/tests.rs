@@ -123,6 +123,19 @@ mod tests {
     }
 
     #[test]
+    fn browser_data_bookmarks_and_defaults() {
+        let mut d = crate::session::BrowserData::default();
+        assert!(d.cookies_enabled);
+        assert!(d.add_bookmark("Ex", "https://example.com"));
+        assert!(!d.add_bookmark("Bad", ""));
+        d.add_bookmark("Ex2", "https://example.com"); // dedupe by URL
+        assert_eq!(d.bookmarks.len(), 1);
+        assert_eq!(d.bookmarks[0].title, "Ex2");
+        assert!(d.remove_bookmark("https://example.com"));
+        assert!(d.bookmarks.is_empty());
+    }
+
+    #[test]
     fn set_active_switches_tabs() {
         let mut tm = TabManager::new();
         let a = tm.open("https://a.com", false);

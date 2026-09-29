@@ -63,7 +63,15 @@ fn tools() -> Value {
       {"name":"browser_tabs_switch","description":"Make a tab active.","inputSchema":{"type":"object","properties":{"tab":{"type":"integer"}},"required":["tab"]}},
       {"name":"browser_page_read","description":"Read visible text of the active tab.","inputSchema":{"type":"object","properties":{}}},
       {"name":"browser_page_url","description":"Get the active tab URL.","inputSchema":{"type":"object","properties":{}}},
-      {"name":"browser_page_eval","description":"Run JS in the active tab (requires MINI_AGENT_EVAL=1 on the browser).","inputSchema":{"type":"object","properties":{"js":{"type":"string"}},"required":["js"]}}
+      {"name":"browser_page_eval","description":"Run JS in the active tab (requires MINI_AGENT_EVAL=1 on the browser).","inputSchema":{"type":"object","properties":{"js":{"type":"string"}},"required":["js"]}},
+      {"name":"browser_history","description":"Navigation history of the active tab.","inputSchema":{"type":"object","properties":{}}},
+      {"name":"browser_back","description":"Navigate back.","inputSchema":{"type":"object","properties":{}}},
+      {"name":"browser_forward","description":"Navigate forward.","inputSchema":{"type":"object","properties":{}}},
+      {"name":"browser_bookmarks_list","description":"List bookmarks.","inputSchema":{"type":"object","properties":{}}},
+      {"name":"browser_bookmarks_add","description":"Add a bookmark.","inputSchema":{"type":"object","properties":{"title":{"type":"string"},"url":{"type":"string"}},"required":["url"]}},
+      {"name":"browser_bookmarks_remove","description":"Remove a bookmark by URL.","inputSchema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}},
+      {"name":"browser_settings","description":"Get browser settings.","inputSchema":{"type":"object","properties":{}}},
+      {"name":"browser_settings_set","description":"Set homepage / search_engine / cookies.","inputSchema":{"type":"object","properties":{"homepage":{"type":"string"},"search_engine":{"type":"string"},"cookies":{"type":"string"}}}}
     ])
 }
 
@@ -90,6 +98,25 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             }
             request("POST", &format!("/eval?js={}", pct(&js)))
         }
+        "browser_history" => request("GET", "/history"),
+        "browser_back" => request("POST", "/back"),
+        "browser_forward" => request("POST", "/forward"),
+        "browser_bookmarks_list" => request("GET", "/bookmarks"),
+        "browser_bookmarks_add" => {
+            let u = a("url");
+            if u.is_empty() {
+                return Err("url required".into());
+            }
+            request("POST", &format!("/bookmarks/add?title={}&url={}", pct(&a("title")), pct(&u)))
+        }
+        "browser_bookmarks_remove" => request("POST", &format!("/bookmarks/remove?url={}", pct(&a("url")))),
+        "browser_settings" => request("GET", "/settings"),
+        "browser_settings_set" => request("POST", &format!(
+            "/settings/set?homepage={}&search_engine={}&cookies={}",
+            pct(&a("homepage")),
+            pct(&a("search_engine")),
+            pct(&a("cookies"))
+        )),
         n => Err(format!("unknown tool {n}")),
     }
 }

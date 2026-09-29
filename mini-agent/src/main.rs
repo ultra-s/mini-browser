@@ -61,7 +61,7 @@ fn percent_encode(s: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: mini-agent <open|navigate|eval|read|url|history|back|forward|new|close|switch|tabs|quit> [arg]";
+    let usage = "usage: mini-agent <open|navigate|eval|read|url|history|back|forward|new|close|switch|tabs|bookmarks|bm-add|bm-remove|settings|quit> [arg]";
     let Some(cmd) = args.first() else {
         eprintln!("{usage}");
         std::process::exit(2);
@@ -75,6 +75,16 @@ fn main() {
         ("read", _) => request("GET", "/read"),
         ("url", _) => request("GET", "/url"),
         ("history", _) => request("GET", "/history"),
+        ("bookmarks", _) => request("GET", "/bookmarks"),
+        ("bm-add", Some(spec)) => {
+            // spec: "url" or "title|url"
+            let (title, url) = spec.split_once('|').unwrap_or(("", spec));
+            request("POST", &format!("/bookmarks/add?title={}&url={}", percent_encode(title), percent_encode(url)))
+        }
+        ("bm-remove", Some(url)) => {
+            request("POST", &format!("/bookmarks/remove?url={}", percent_encode(url)))
+        }
+        ("settings", _) => request("GET", "/settings"),
         ("back", _) => request("POST", "/back"),
         ("forward", _) => request("POST", "/forward"),
         ("switch", Some(id)) => request("POST", &format!("/switch?tab={}", percent_encode(id))),

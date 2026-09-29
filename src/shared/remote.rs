@@ -12,6 +12,24 @@ use std::sync::{Arc, Mutex};
 static HANDLER: Mutex<Option<Arc<Mutex<SimpleHandler>>>> = Mutex::new(None);
 /// Result of the latest /read: (sequence, visible text).
 static LAST_READ: Mutex<Option<(u64, String)>> = Mutex::new(None);
+/// Persisted browser data (bookmarks/settings). Lazy-init from the profile dir.
+static BROWSER_DATA: Mutex<Option<mini_core::session::BrowserData>> = Mutex::new(None);
+static DATA_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+fn with_data<T>(f: impl FnOnce(&mut mini_core::session::BrowserData) -> T) -> Option<T> {
+    let mut guard = BROWSER_DATA.lock().unwrap();
+    let data = guard.get_or_insert_with(mini_core::session::BrowserData::default);
+    Some(f(data))
+}
+
+fn save_data() {
+    if let (Some(data), Some(path)) = (
+        BROWSER_DATA.lock().unwrap().as_ref(),
+        DATA_PATH.lock().unwrap().as_ref(),
+    ) {
+        data.save(path);
+    }
+}
 
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -376,6 +394,85 @@ fn handle_request(mut stream: std::net::TcpStream) {
                 .unwrap_or_else(|| r#"{"ok":false}"#.into());
             ("200 OK", body)
         }
+        // ── Bookmarks & settings (persisted 0600, shared shape with Android) ──
+        ("GET", "/bookmarks") => {
+            let guard = BROWSER_DATA.lock().unwrap();
+            match guard.as_ref() {
+                Some(d) => {
+                    let items: Vec<String> = d
+                        .bookmarks
+                        .iter()
+                        .map(|b| {
+                            format!(
+                                r#"{{"title":{},"url":{}}}"#,
+                                json_escape(&b.title),
+                                json_escape(&b.url)
+                            )
+                        })
+                        .collect();
+                    ("200 OK", format!(r#"{{"ok":true,"bookmarks":[{}]}}"#, items.join(",")))
+                }
+                None => ("200 OK", r#"{"ok":true,"bookmarks":[]}"#.to_string()),
+            }
+        }
+        ("POST", "/bookmarks/add") => {
+            let url = query_param(path, "url").unwrap_or_default();
+            let title = query_param(path, "title").unwrap_or_default();
+            if url.is_empty() {
+                ("400 Bad Request", r#"{"error":"missing url"}"#.to_string())
+            } else {
+                match with_data(|d| d.add_bookmark(&title, &url)) {
+                    Some(true) => {
+                        save_data();
+                        ("200 OK", r#"{"ok":true}"#.to_string())
+                    }
+                    _ => ("400 Bad Request", r#"{"error":"invalid url"}"#.to_string()),
+                }
+            }
+        }
+        ("POST", "/bookmarks/remove") => {
+            let url = query_param(path, "url").unwrap_or_default();
+            if url.is_empty() {
+                ("400 Bad Request", r#"{"error":"missing url"}"#.to_string())
+            } else {
+                let removed = with_data(|d| d.remove_bookmark(&url)).unwrap_or(false);
+                save_data();
+                ("200 OK", format!(r#"{{"ok":{}}}"#, removed))
+            }
+        }
+        ("GET", "/settings") => {
+            let guard = BROWSER_DATA.lock().unwrap();
+            match guard.as_ref() {
+                Some(d) => (
+                    "200 OK",
+                    format!(
+                        r#"{{"ok":true,"homepage":{},"search_engine":{},"cookies_enabled":{}}}"#,
+                        json_escape(&d.homepage),
+                        json_escape(&d.search_engine),
+                        d.cookies_enabled
+                    ),
+                ),
+                None => ("200 OK", r#"{"ok":true}"#.to_string()),
+            }
+        }
+        ("POST", "/settings/set") => {
+            let homepage = query_param(path, "homepage");
+            let engine = query_param(path, "search_engine");
+            let cookies = query_param(path, "cookies");
+            with_data(|d| {
+                if let Some(h) = homepage {
+                    d.homepage = h;
+                }
+                if let Some(e) = engine {
+                    d.search_engine = e;
+                }
+                if let Some(c) = cookies {
+                    d.cookies_enabled = c == "1" || c == "true";
+                }
+            });
+            save_data();
+            ("200 OK", r#"{"ok":true}"#.to_string())
+        }
         // Navigation history of the active tab.
         ("GET", "/history") => {
             let body = SimpleHandler::instance()
@@ -511,6 +608,19 @@ pub fn start() {
         std::env::var("MINI_REMOTE_RPM").ok().and_then(|v| v.parse().ok()).unwrap_or(120),
         30,
     ));
+
+    // Load persisted browser data (bookmarks/settings). Skipped in stealth mode:
+    // stealth must never read or write user data.
+    if std::env::var("MINI_STEALTH").as_deref() != Ok("1") {
+        let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+        if let Some(dir) = std::env::var("MINI_CACHE_DIR").ok().or_else(|| {
+            home.map(|h| h.join(".mini-browser").to_string_lossy().into_owned())
+        }) {
+            let path = std::path::Path::new(&dir).join("mini-data.json");
+            *DATA_PATH.lock().unwrap() = Some(path.clone());
+            *BROWSER_DATA.lock().unwrap() = Some(mini_core::session::BrowserData::load(&path));
+        }
+    }
 
     let listen_addr = addr.clone();
     std::thread::spawn(move || {
