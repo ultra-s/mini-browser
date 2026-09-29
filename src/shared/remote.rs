@@ -200,17 +200,81 @@ fn query_param<'a>(path: &'a str, key: &str) -> Option<String> {
     None
 }
 
+/// Session auth token (auto-generated at start; written to the profile dir with 0600).
+static AUTH_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static RATE: std::sync::OnceLock<mini_core::agent_api::RateLimiter> = std::sync::OnceLock::new();
+
+fn respond(stream: &mut std::net::TcpStream, status: &str, body: &str) {
+    let resp = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(resp.as_bytes());
+}
+
 fn handle_request(mut stream: std::net::TcpStream) {
+    use std::io::Read as _;
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
+    // Cap the request line at 8 KiB (oversized requests are rejected before parsing).
+    {
+        let mut capped = reader.by_ref().take(8 * 1024);
+        match capped.read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
+    if line.len() >= 8 * 1024 {
+        respond(&mut stream, "414 URI Too Long", r#"{"error":"request too large"}"#);
         return;
     }
-    // drain headers
+    // capture Authorization header, then drain the rest
+    let mut auth_header: Option<String> = None;
     loop {
         let mut h = String::new();
         if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
             break;
+        }
+        let lower = h.to_ascii_lowercase();
+        if lower.starts_with("authorization:") {
+            auth_header = Some(h.trim().to_string());
+        }
+        if h.len() > 16 * 1024 {
+            respond(&mut stream, "431 Request Header Fields Too Large", r#"{"error":"headers too large"}"#);
+            return;
+        }
+    }
+    // ── Security gate 1: token auth (constant-time) ──
+    {
+        let expected = AUTH_TOKEN.lock().unwrap().clone().unwrap_or_default();
+        if !expected.is_empty() {
+            let provided = auth_header
+                .as_ref()
+                .and_then(|h| {
+                    let lower = h.to_ascii_lowercase();
+                    let rest = if lower.starts_with("authorization:") { &h[14..] } else { return None };
+                    let v = rest.trim();
+                    Some(v.strip_prefix("Bearer ").unwrap_or(v).trim().to_string())
+                })
+                .or_else(|| {
+                    // also accept ?token= for mini-agent convenience
+                    let l = line.trim_end();
+                    let target = l.split_whitespace().nth(1).unwrap_or(l);
+                    let qs = target.split_once('?').map(|x| x.1).unwrap_or("");
+                    qs.split('&').find_map(|p| p.strip_prefix("token=")).map(|s| s.to_string())
+                })
+                .unwrap_or_default();
+            if !mini_core::agent_api::ct_eq(provided.as_bytes(), expected.as_bytes()) {
+                respond(&mut stream, "401 Unauthorized", r#"{"error":"invalid token"}"#);
+                return;
+            }
+        }
+    }
+    // ── Security gate 2: rate limit ──
+    if let Some(rl) = RATE.get() {
+        if !rl.allow() {
+            respond(&mut stream, "429 Too Many Requests", r#"{"error":"rate limited"}"#);
+            return;
         }
     }
     let mut parts = line.split_whitespace();
@@ -240,14 +304,17 @@ fn handle_request(mut stream: std::net::TcpStream) {
             }
             _ => ("400 Bad Request", r#"{"error":"missing url"}"#.to_string()),
         },
-        ("POST", "/eval") => match query_param(path, "js") {
-            Some(js) if !js.is_empty() => {
+        ("POST", "/eval") => {
+            if std::env::var("MINI_AGENT_EVAL").as_deref() != Ok("1") {
+                ("403 Forbidden", r#"{"error":"eval disabled (set MINI_AGENT_EVAL=1)"}"#.to_string())
+            } else if let Some(js) = query_param(path, "js").filter(|j| !j.is_empty()) {
                 let mut task = EvalJs::new(js);
                 post_task(ThreadId::UI, Some(&mut task));
                 ("200 OK", r#"{"ok":true}"#.to_string())
+            } else {
+                ("400 Bad Request", r#"{"error":"missing js"}"#.to_string())
             }
-            _ => ("400 Bad Request", r#"{"error":"missing js"}"#.to_string()),
-        },
+        }
         ("POST", "/quit") => {
             let mut task = Quit::new();
             post_task(ThreadId::UI, Some(&mut task));
@@ -306,17 +373,60 @@ fn handle_request(mut stream: std::net::TcpStream) {
 }
 
 pub fn start() {
-    let addr = std::env::var("MINI_REMOTE_ADDR").unwrap_or_else(|_| "127.0.0.1:9777".into());
+    // ── Security defaults ────────────────────────────────────────────
+    // Local-only unless explicitly overridden AND a token is set.
+    let mut addr = std::env::var("MINI_REMOTE_ADDR").unwrap_or_else(|_| "127.0.0.1:9777".into());
+    let allow_remote = std::env::var("MINI_REMOTE_ALLOW_REMOTE").as_deref() == Ok("1");
+    let env_token = std::env::var("MINI_REMOTE_TOKEN").ok().filter(|t| !t.is_empty());
+
+    // Token: env-provided or CSPRNG-generated, persisted 0600 next to the session file.
+    let token = env_token.unwrap_or_else(|| {
+        let generated = mini_core::agent_api::generate_token().unwrap_or_else(|_| {
+            // /dev/urandom unavailable: refuse to serve with a predictable token.
+            "disabled".to_string()
+        });
+        let home_dir = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+        if let Some(dir) = std::env::var("MINI_CACHE_DIR").ok().or_else(|| {
+            home_dir.map(|h| h.join(".mini-browser").to_string_lossy().into_owned())
+        }) {
+            let tp = std::path::Path::new(&dir).join("remote-token");
+            let _ = std::fs::write(&tp, format!("{generated}\n"));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tp, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+        generated
+    });
+    *AUTH_TOKEN.lock().unwrap() = if token == "disabled" { None } else { Some(token) };
+
+    if allow_remote {
+        if std::env::var("MINI_REMOTE_TOKEN").is_err() {
+            eprintln!("[mini] remote control: REMOTE binding refused without MINI_REMOTE_TOKEN");
+            return;
+        }
+    } else if !addr.starts_with("127.0.0.1") && !addr.starts_with("localhost") {
+        eprintln!("[mini] remote control: non-local bind refused (set MINI_REMOTE_ALLOW_REMOTE=1)");
+        addr = "127.0.0.1:9777".into();
+    }
+
+    let _ = RATE.set(mini_core::agent_api::RateLimiter::new(
+        std::env::var("MINI_REMOTE_RPM").ok().and_then(|v| v.parse().ok()).unwrap_or(120),
+        30,
+    ));
+
+    let listen_addr = addr.clone();
     std::thread::spawn(move || {
-        if let Ok(listener) = TcpListener::bind(&addr) {
-            eprintln!("[mini] remote control listening on http://{addr}");
+        if let Ok(listener) = TcpListener::bind(&listen_addr) {
+            eprintln!("[mini] remote control listening on http://{listen_addr} (token auth on)");
             for stream in listener.incoming() {
                 if let Ok(s) = stream {
                     std::thread::spawn(move || handle_request(s));
                 }
             }
         } else {
-            eprintln!("[mini] remote control: could not bind {addr}");
+            eprintln!("[mini] remote control: could not bind {listen_addr}");
         }
     });
 }

@@ -3,6 +3,7 @@
 //! Everything here is UI-engine-agnostic.
 
 pub mod agent;
+pub mod agent_api;
 pub mod session;
 pub mod stealth;
 #[cfg(test)]

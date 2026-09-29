@@ -13,6 +13,20 @@ fn addr() -> String {
     std::env::var("MINI_REMOTE_ADDR").unwrap_or_else(|_| "127.0.0.1:9777".into())
 }
 
+/// Auth token: MINI_REMOTE_TOKEN env, or the token file the browser wrote (0600).
+fn token() -> Option<String> {
+    if let Ok(t) = std::env::var("MINI_REMOTE_TOKEN") {
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    let home = std::env::var("HOME").ok()?;
+    let p = std::path::Path::new(&home)
+        .join(".mini-browser")
+        .join("remote-token");
+    std::fs::read_to_string(p).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
 fn request(method: &str, path: &str) -> Result<String, String> {
     let mut stream = TcpStream::connect(addr()).map_err(|e| {
         format!(
@@ -20,8 +34,11 @@ fn request(method: &str, path: &str) -> Result<String, String> {
             addr()
         )
     })?;
+    let auth = token()
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
     let req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\nContent-Length: 0\r\n\r\n"
     );
     stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
     let mut resp = String::new();
@@ -44,7 +61,7 @@ fn percent_encode(s: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: mini-agent <open|navigate|eval|tabs|quit> [arg]";
+    let usage = "usage: mini-agent <open|navigate|eval|read|new|close|tabs|quit> [arg]";
     let Some(cmd) = args.first() else {
         eprintln!("{usage}");
         std::process::exit(2);
@@ -55,6 +72,12 @@ fn main() {
             request("POST", &format!("/navigate?url={}", percent_encode(url)))
         }
         ("eval", Some(js)) => request("POST", &format!("/eval?js={}", percent_encode(js))),
+        ("read", _) => request("GET", "/read"),
+        ("new", arg) => match arg {
+            Some(url) => request("POST", &format!("/new?url={}", percent_encode(url))),
+            None => request("POST", "/new"),
+        },
+        ("close", Some(id)) => request("POST", &format!("/close?tab={}", percent_encode(id))),
         ("tabs", _) => request("GET", "/tabs"),
         ("quit", _) => request("POST", "/quit"),
         _ => {
