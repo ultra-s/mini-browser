@@ -149,12 +149,18 @@ jobs:
           done < <(find out/windows -type f)
           ls -la rel/ | head -30
 
-      - name: Publish versioned release
+      - name: Publish versioned release (rate-limit safe)
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ needs.version.outputs.version }}
           name: "Mini Browser v${{ needs.version.outputs.version }}"
           body_path: RELEASE_NOTES.md
           prerelease: false
           make_latest: true
+          fail_on_unmatched_files: true
           files: rel/*
+          # retry on secondary rate limit
+          max_retries: 5
+          retry_backoff_ms: 30000
