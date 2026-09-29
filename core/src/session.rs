@@ -49,6 +49,17 @@ impl TabManager {
         }
     }
 
+    /// Set the active tab; returns false if id is unknown.
+    pub fn set_active(&mut self, id: TabId) -> bool {
+        if !self.tabs.iter().any(|t| t.id == id) {
+            return false;
+        }
+        for t in self.tabs.iter_mut() {
+            t.active = t.id == id;
+        }
+        true
+    }
+
     pub fn close(&mut self, id: TabId) {
         self.tabs.retain(|t| t.id != id);
         if !self.tabs.iter().any(|t| t.active) {

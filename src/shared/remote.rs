@@ -146,6 +146,20 @@ wrap_task! {
 }
 
 wrap_task! {
+    struct SwitchTab {
+        tab_id: u64,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(h) = SimpleHandler::instance() {
+                h.lock().unwrap().switch_tab(self.tab_id);
+            }
+        }
+    }
+}
+
+wrap_task! {
     struct CloseTab {
         tab_id: u64,
     }
@@ -321,6 +335,32 @@ fn handle_request(mut stream: std::net::TcpStream) {
             ("200 OK", r#"{"ok":true}"#.to_string())
         }
         ("GET", "/health") => ("200 OK", r#"{"ok":true,"app":"mini-browser"}"#.to_string()),
+        // Active tab URL (PageUrl): synchronous from tracked tab state.
+        ("GET", "/url") => {
+            let body = SimpleHandler::instance()
+                .map(|h| {
+                    let h = h.lock().unwrap();
+                    let url = h
+                        .tabs()
+                        .tabs()
+                        .iter()
+                        .find(|t| t.active)
+                        .map(|t| t.url.clone())
+                        .unwrap_or_default();
+                    format!(r#"{{"ok":true,"url":{}}}"#, json_escape(&url))
+                })
+                .unwrap_or_else(|| r#"{"ok":false}"#.into());
+            ("200 OK", body)
+        }
+        // Switch the active tab (TabsSwitch): raise the browser window for tab id.
+        ("POST", "/switch") => match query_param(path, "tab").and_then(|t| t.parse::<u64>().ok()) {
+            Some(id) => {
+                let mut task = SwitchTab::new(id);
+                post_task(ThreadId::UI, Some(&mut task));
+                ("200 OK", r#"{"ok":true}"#.to_string())
+            }
+            _ => ("400 Bad Request", r#"{"error":"missing tab"}"#.to_string()),
+        },
         // ReadActiveTab: fetch visible text of the active tab. The JS result arrives
         // asynchronously via a StringVisitor; poll LAST_READ until it changes or timeout.
         ("GET", "/read") => {

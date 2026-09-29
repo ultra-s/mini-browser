@@ -314,6 +314,40 @@ impl SimpleHandler {
         true
     }
 
+    /// Tracked tab state (for the remote API).
+    pub fn tabs(&self) -> &mini_core::session::TabManager {
+        &self.tabs
+    }
+
+    /// Mark tab as active and raise its browser window.
+    pub fn switch_tab(&mut self, tab_id: u64) -> bool {
+        if !self.tabs.set_active(tab_id) {
+            return false;
+        }
+        let want = self
+            .tabs()
+            .tabs()
+            .iter()
+            .find(|t| t.id == tab_id)
+            .map(|t| t.url.clone());
+        if let Some(want) = want {
+            if let Some(idx) = self
+                .browser_list
+                .iter()
+                .position(|b| {
+                    b.main_frame().map(|f| CefString::from(&f.url()).to_string()) == Some(want.clone())
+                })
+            {
+                if let Some(b) = self.browser_list.get(idx) {
+                    if let Some(host) = b.host() {
+                        host.set_focus(true as _);
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// The most recently created browser (for remote API reads).
     pub fn active_browser(&self) -> Option<Browser> {
         self.browser_list.last().cloned()
