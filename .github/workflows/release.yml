@@ -143,6 +143,7 @@ jobs:
           done
           cd ../windows
           find . -type f | while read -r f; do
+            f="${f#./}"
             mkdir -p "../../rel/$(dirname "$f")"
             if [ -f "../../rel/$f" ]; then
               cp "$f" "../../rel/win-$f"
