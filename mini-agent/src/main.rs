@@ -61,7 +61,7 @@ fn percent_encode(s: &str) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: mini-agent <open|navigate|eval|read|url|new|close|switch|tabs|quit> [arg]";
+    let usage = "usage: mini-agent <open|navigate|eval|read|url|history|back|forward|new|close|switch|tabs|quit> [arg]";
     let Some(cmd) = args.first() else {
         eprintln!("{usage}");
         std::process::exit(2);
@@ -74,6 +74,9 @@ fn main() {
         ("eval", Some(js)) => request("POST", &format!("/eval?js={}", percent_encode(js))),
         ("read", _) => request("GET", "/read"),
         ("url", _) => request("GET", "/url"),
+        ("history", _) => request("GET", "/history"),
+        ("back", _) => request("POST", "/back"),
+        ("forward", _) => request("POST", "/forward"),
         ("switch", Some(id)) => request("POST", &format!("/switch?tab={}", percent_encode(id))),
         ("switch", None) => Err("switch requires a tab id".to_string()),
         ("new", arg) => match arg {

@@ -146,6 +146,30 @@ wrap_task! {
 }
 
 wrap_task! {
+    struct GoBack;
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(h) = SimpleHandler::instance() {
+                h.lock().unwrap().go_back();
+            }
+        }
+    }
+}
+
+wrap_task! {
+    struct GoForward;
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(h) = SimpleHandler::instance() {
+                h.lock().unwrap().go_forward();
+            }
+        }
+    }
+}
+
+wrap_task! {
     struct SwitchTab {
         tab_id: u64,
     }
@@ -351,6 +375,38 @@ fn handle_request(mut stream: std::net::TcpStream) {
                 })
                 .unwrap_or_else(|| r#"{"ok":false}"#.into());
             ("200 OK", body)
+        }
+        // Navigation history of the active tab.
+        ("GET", "/history") => {
+            let body = SimpleHandler::instance()
+                .map(|h| {
+                    let h = h.lock().unwrap();
+                    match h.tabs().nav_for_active() {
+                        Some(nav) => {
+                            let backs: Vec<String> =
+                                nav.back.iter().map(|u| json_escape(u)).collect();
+                            format!(
+                                r#"{{"ok":true,"back":[{}],"can_back":{},"can_forward":{}}}"#,
+                                backs.join(","),
+                                nav.can_back(),
+                                nav.can_forward()
+                            )
+                        }
+                        None => r#"{"ok":false}"#.into(),
+                    }
+                })
+                .unwrap_or_else(|| r#"{"ok":false}"#.into());
+            ("200 OK", body)
+        }
+        ("POST", "/back") => {
+            let mut task = GoBack::new();
+            post_task(ThreadId::UI, Some(&mut task));
+            ("200 OK", r#"{"ok":true}"#.to_string())
+        }
+        ("POST", "/forward") => {
+            let mut task = GoForward::new();
+            post_task(ThreadId::UI, Some(&mut task));
+            ("200 OK", r#"{"ok":true}"#.to_string())
         }
         // Switch the active tab (TabsSwitch): raise the browser window for tab id.
         ("POST", "/switch") => match query_param(path, "tab").and_then(|t| t.parse::<u64>().ok()) {

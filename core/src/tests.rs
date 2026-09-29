@@ -109,4 +109,26 @@ mod tests {
         assert!(ua.contains("Mini Stealth"));
         assert!(!ua.contains("X11"));
     }
+
+    #[test]
+    fn nav_history_tracks_navigation() {
+        let mut tm = TabManager::new();
+        tm.open("https://a.com", false);
+        tm.set_url_for_active("https://b.com");
+        tm.set_url_for_active("https://c.com");
+        let nav = tm.nav_for_active().unwrap();
+        assert!(nav.can_back());
+        assert!(!nav.can_forward());
+        assert!(nav.back.contains(&"https://a.com".to_string()));
+    }
+
+    #[test]
+    fn set_active_switches_tabs() {
+        let mut tm = TabManager::new();
+        let a = tm.open("https://a.com", false);
+        let _b = tm.open("https://b.com", true);
+        assert!(tm.set_active(a));
+        assert!(tm.tabs().iter().find(|t| t.id == a).unwrap().active);
+        assert!(!tm.set_active(9999));
+    }
 }

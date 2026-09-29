@@ -319,6 +319,20 @@ impl SimpleHandler {
         &self.tabs
     }
 
+    /// Navigate the most recent browser back (CEF history).
+    pub fn go_back(&self) {
+        if let Some(b) = self.browser_list.last() {
+            b.go_back();
+        }
+    }
+
+    /// Navigate the most recent browser forward (CEF history).
+    pub fn go_forward(&self) {
+        if let Some(b) = self.browser_list.last() {
+            b.go_forward();
+        }
+    }
+
     /// Mark tab as active and raise its browser window.
     pub fn switch_tab(&mut self, tab_id: u64) -> bool {
         if !self.tabs.set_active(tab_id) {

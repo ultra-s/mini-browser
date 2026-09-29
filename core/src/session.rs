@@ -5,6 +5,33 @@ use std::path::Path;
 
 pub type TabId = u64;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NavHistory {
+    pub back: Vec<String>,
+    pub forward: Vec<String>,
+}
+
+impl NavHistory {
+    /// Record a navigation: current URL moves to back stack, forward is cleared.
+    pub fn push(&mut self, url: &str) {
+        if self.back.last().map(|u| u.as_str()) != Some(url) {
+            self.back.push(url.to_string());
+            if self.back.len() > 100 {
+                self.back.remove(0);
+            }
+        }
+        self.forward.clear();
+    }
+
+    pub fn can_back(&self) -> bool {
+        self.back.len() > 1
+    }
+
+    pub fn can_forward(&self) -> bool {
+        !self.forward.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tab {
     pub id: TabId,
@@ -12,6 +39,8 @@ pub struct Tab {
     pub title: String,
     pub active: bool,
     pub pinned: bool,
+    #[serde(default)]
+    pub nav: NavHistory,
 }
 
 /// Engine-agnostic tab state. The platform shell (CEF window / Android Activity)
@@ -36,6 +65,7 @@ impl TabManager {
             title: String::new(),
             active: self.tabs.is_empty() || !background,
             pinned: false,
+            nav: NavHistory::default(),
         });
         if !background {
             self.activate(id);
@@ -70,9 +100,22 @@ impl TabManager {
     }
 
     pub fn set_url_for_active(&mut self, url: impl Into<String>) {
+        let url = url.into();
         if let Some(tab) = self.tabs.iter_mut().find(|t| t.active) {
-            tab.url = url.into();
+            if tab.url != url {
+                tab.nav.push(&tab.url.clone());
+                tab.nav.back.push(url.clone()); // current page at the top of back
+                if tab.nav.back.len() > 101 {
+                    tab.nav.back.remove(0);
+                }
+                tab.url = url;
+            }
         }
+    }
+
+    /// Navigation history of the active tab (back stack, can_back, can_forward).
+    pub fn nav_for_active(&self) -> Option<&NavHistory> {
+        self.tabs.iter().find(|t| t.active).map(|t| &t.nav)
     }
 
     pub fn set_title_for_url(&mut self, url: &str, title: impl Into<String>) {
