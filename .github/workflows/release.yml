@@ -14,7 +14,7 @@ on:
         options: [patch, minor, major]
   push:
     branches: [main]
-    paths: ["android/**", "src/**", "core/**", "mini-agent/**"]
+    paths: ["android/**", "src/**", "core/**", "mini-agent/**", "mini-mcp/**"]
 
 permissions:
   contents: write
@@ -81,6 +81,7 @@ jobs:
             echo "- \`Mini.apk\` — Android (signed, installable)"
             echo "- \`mini-browser\` / \`mini-browser.exe\` — desktop Linux / Windows"
             echo "- \`mini-agent\` / \`mini-agent.exe\` — agent CLI (Linux / Windows)"
+            echo "- \`mini-mcp\` / \`mini-mcp.exe\` — MCP server (stdio JSON-RPC) exposing the browser as standard tools"
           } > RELEASE_NOTES.md
 
       - uses: actions/upload-artifact@v4

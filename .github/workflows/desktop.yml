@@ -66,13 +66,16 @@ jobs:
           fi
           cargo build --release --no-default-features
           (cd mini-agent && cargo build --release)
+          (cd mini-mcp && cargo build --release)
           mkdir -p dist
           if [ "$RUNNER_OS" = "Windows" ]; then
             cp target/release/mini-browser.exe dist/
             cp mini-agent/target/release/mini-agent.exe dist/
+            cp mini-mcp/target/release/mini-mcp.exe dist/
           else
             cp target/release/mini-browser dist/
             cp mini-agent/target/release/mini-agent dist/
+            cp mini-mcp/target/release/mini-mcp dist/
           fi
 
       - name: Bundle CEF runtime (self-contained — no separate download)
