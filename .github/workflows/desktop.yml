@@ -96,8 +96,9 @@ jobs:
               [ -e "$CEF_DIR/$f" ] && cp "$CEF_DIR/$f" dist/ || true
             done
           fi
-          mkdir -p dist/locales
-          [ -f "$CEF_DIR/locales/en-US.pak" ] && cp "$CEF_DIR/locales/en-US.pak" dist/locales/ || true
+          # GitHub release assets are flat: ship the locale pak with a flat name.
+          # After downloading, put it in a "locales" folder next to the binary as "en-US.pak".
+          [ -f "$CEF_DIR/locales/en-US.pak" ] && cp "$CEF_DIR/locales/en-US.pak" dist/locales-en-US.pak || true
           ls -la dist/ | head -20
           # strip the fat debug symbols off libcef
           if [ "$RUNNER_OS" = "Linux" ]; then
