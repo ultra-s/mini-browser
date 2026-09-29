@@ -75,6 +75,37 @@ jobs:
             cp mini-agent/target/release/mini-agent dist/
           fi
 
+      - name: Bundle CEF runtime (self-contained — no separate download)
+        shell: bash
+        run: |
+          CEF_DIR="$HOME/.local/share/cef"
+          # copy runtime files the binary needs (skip dev headers/cmake)
+          for f in "$CEF_DIR"/*; do
+            base=$(basename "$f")
+            case "$base" in
+              cmake|CMakeLists.txt|libcef_dll|archive.json) continue ;;
+            esac
+            cp -r "$f" dist/
+          done
+          # strip the fat debug symbols off libcef
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            strip dist/libcef.so dist/v8_context_snapshot.bin 2>/dev/null || true
+            strip dist/mini-browser dist/mini-agent 2>/dev/null || true
+          else
+            # windows: strip not available; libcef.dll keeps symbols but still works
+            true
+          fi
+          # launcher so LD_LIBRARY_PATH just works
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            printf '#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+export LD_LIBRARY_PATH="$DIR:$LD_LIBRARY_PATH"
+exec "$DIR/mini-browser" "$@"
+' > dist/mini-browser-run
+            chmod +x dist/mini-browser-run
+          fi
+          du -sh dist
+
       - name: Upload binaries (raw, not zipped)
         uses: actions/upload-artifact@v4
         with:

@@ -89,6 +89,37 @@ pub fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut
         // Do not persist session cookies.
         settings.persist_session_cookies = 0;
     }
+    // --- Engine switches ---------------------------------------------------
+    if let Some(cmd) = command_line_get_global() {
+        // GPU acceleration on by default (smooth scrolling, raster, WebGL).
+        cmd.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
+        cmd.append_switch(Some(&CefString::from("enable-zero-copy")));
+        cmd.append_switch(Some(&CefString::from("enable-smooth-scrolling")));
+        cmd.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
+
+        // Custom UA profiles: MINI_UA=desktop (default) | mobile | stealth | <literal>
+        let ua = std::env::var("MINI_UA").unwrap_or_else(|_| "desktop".into());
+        let ua_value = match ua.as_str() {
+            "mobile" => Some("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36".to_string()),
+            "stealth" => Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36".to_string()),
+            "desktop" => None, // engine default
+            other => Some(other.to_string()),
+        };
+        if let Some(v) = ua_value {
+            cmd.append_switch_with_value(Some(&CefString::from("user-agent")), Some(&CefString::from(v.as_str())));
+        }
+
+        // Stealth hardening: no referrer leak, disable background tracking traffic.
+        if stealth {
+            cmd.append_switch_with_value(Some(&CefString::from("referer")), Some(&CefString::from("no-referrer")));
+            cmd.append_switch(Some(&CefString::from("disable-background-networking")));
+            cmd.append_switch(Some(&CefString::from("disable-component-update")));
+            cmd.append_switch(Some(&CefString::from("disable-sync")));
+            cmd.append_switch(Some(&CefString::from("no-default-browser-check")));
+            cmd.append_switch(Some(&CefString::from("disable-features=OptimizationHints,MediaRouter")));
+        }
+    }
+
     // Stealth/Tor proxy must go through the command line: MINI_PROXY=socks5://127.0.0.1:9050
     if let Ok(proxy) = std::env::var("MINI_PROXY") {
         if !proxy.is_empty() {
@@ -113,4 +144,9 @@ pub fn run_main(main_args: &MainArgs, cmd_line: &CommandLine, sandbox_info: *mut
     run_message_loop();
 
     shutdown();
+
+    // Stealth: wipe the throwaway cache dir completely on exit.
+    if stealth {
+        let _ = std::fs::remove_dir_all(&cache);
+    }
 }

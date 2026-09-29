@@ -23,6 +23,7 @@ import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.WebViewDatabase
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
@@ -134,6 +135,11 @@ class MainActivity : Activity() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun buildUi() {
+        // Display cutout: draw behind the camera cutout but keep chrome clear of it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
         root = FrameLayout(this).apply { setBackgroundColor(Color.parseColor("#0E0D12")) }
 
         webView = WebView(this)
@@ -153,6 +159,15 @@ class MainActivity : Activity() {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP)
             setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        // Respect status-bar + display-cutout insets so nothing overflows under the camera.
+        topChrome.setOnApplyWindowInsetsListener { v, insets ->
+            val cutoutTop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                insets.displayCutout?.safeInsetTop ?: 0
+            } else 0
+            val statusTop = insets.systemWindowInsetTop
+            v.setPadding(dp(8), dp(6) + maxOf(cutoutTop, statusTop), dp(8), dp(6))
+            insets
         }
 
         val omniboxRow = LinearLayout(this).apply {
@@ -219,6 +234,17 @@ class MainActivity : Activity() {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(52), Gravity.BOTTOM)
         }
+        // Keep the bar above the gesture/navigation bar.
+        bottomBar.setOnApplyWindowInsetsListener { v, insets ->
+            val navBottom = insets.systemWindowInsetBottom
+            v.setPadding(0, 0, 0, navBottom)
+            val lp = v.layoutParams as FrameLayout.LayoutParams
+            if (lp.height != dp(52) + navBottom) {
+                lp.height = dp(52) + navBottom
+                v.layoutParams = lp
+            }
+            insets
+        }
         fun tb(label: String, onTap: () -> Unit) = MiniIconButton(this, label, 48f) { onTap() }.apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
         }
@@ -243,6 +269,7 @@ class MainActivity : Activity() {
             "History" to { if (stealth) toast.show("No history in stealth") else showList("History") { store.history() } },
             "Reading list" to { showList("Reading list") { store.readingList() } },
             "Search engine: " + store.searchEngine.uppercase() to { cycleEngine() },
+            "UA profile: " + store.uaProfile to { cycleUa() },
             "Export data" to { exportData() },
             "Wipe all data" to { store.wipeAll(); purgeEverything(); toast.show("All data wiped") },
             "New tab" to { newTab(store.homePage) },
@@ -440,6 +467,23 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun cycleUa() {
+        val profiles = listOf("auto", "desktop", "mobile", "stealth")
+        store.uaProfile = profiles[(profiles.indexOf(store.uaProfile) + 1) % profiles.size]
+        applyUa()
+        webView.reload()
+        toast.show("UA: ${store.uaProfile}")
+    }
+
+    private fun applyUa() {
+        if (!::webView.isInitialized) return
+        webView.settings.userAgentString = when {
+            stealth -> STEALTH_UA
+            desktopMode -> "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+            else -> store.uaFor(store.uaProfile, WebSettings.getDefaultUserAgent(this))
+        }
+    }
+
     private fun cycleEngine() {
         val engines = listOf("ddg", "google", "bing", "brave")
         val next = engines[(engines.indexOf(store.searchEngine) + 1) % engines.size]
@@ -530,16 +574,22 @@ class MainActivity : Activity() {
 
     private fun purgeEverything() {
         if (!::webView.isInitialized) return
-        webView.apply { clearCache(true); clearFormData(); clearHistory(); clearSslPreferences() }
+        webView.apply {
+            clearCache(true); clearFormData(); clearHistory(); clearSslPreferences()
+            clearLocalStorage(); clearMatches()
+            android.webkit.WebStorage.getInstance().deleteAllData()
+            WebViewDatabase.getInstance(context).clearHttpAuthUsernamePassword()
+            context.deleteDatabase("webview.db")
+            context.deleteDatabase("webviewCache.db")
+        }
         CookieManager.getInstance().apply { removeAllCookies(null); flush() }
+        // Remove stealth temp files (cache dirs used during the session).
+        cacheDir.deleteRecursively()
     }
 
     private fun toggleDesktopMode(on: Boolean) {
         desktopMode = on
-        webView.settings.userAgentString = if (on)
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
-        else if (stealth) STEALTH_UA
-        else WebSettings.getDefaultUserAgent(this)
+        applyUa()
         webView.settings.useWideViewPort = on
         webView.reload()
     }

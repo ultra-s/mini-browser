@@ -107,6 +107,19 @@ class MiniStore(context: Context) {
 
     // ------------------------------------------------------------- settings
 
+    /** Custom UA profile: "auto" | "desktop" | "mobile" | "stealth" | literal string. */
+    var uaProfile: String
+        get() = prefs.getString("ua", "auto")!!
+        set(v) = prefs.edit().putString("ua", v).apply()
+
+    fun uaFor(profile: String, systemDefault: String): String = when (profile) {
+        "desktop" -> "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+        "mobile" -> systemDefault
+        "stealth" -> "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+        "auto" -> systemDefault
+        else -> profile
+    }
+
     var homePage: String
         get() = prefs.getString("home", "file:///android_asset/start.html")!!
         set(v) = prefs.edit().putString("home", v).apply()
