@@ -10,8 +10,8 @@ android {
         applicationId = "dev.mini.browser"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "1.1.17"
+        versionCode = 20
+        versionName = "1.1.18"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
