@@ -576,7 +576,7 @@ class MainActivity : Activity() {
         if (!::webView.isInitialized) return
         webView.apply {
             clearCache(true); clearFormData(); clearHistory(); clearSslPreferences()
-            clearLocalStorage(); clearMatches()
+            clearMatches()
             android.webkit.WebStorage.getInstance().deleteAllData()
             WebViewDatabase.getInstance(context).clearHttpAuthUsernamePassword()
             context.deleteDatabase("webview.db")
